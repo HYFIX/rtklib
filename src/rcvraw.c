@@ -106,12 +106,6 @@ static int32_t merge_two_s(int32_t a, uint32_t b, int n)
 {
     return (int32_t)((a<<n)+b);
 }
-/* get sign-magnitude bits ---------------------------------------------------*/
-static double getbitg(const uint8_t *buff, int pos, int len)
-{
-    double value=getbitu(buff,pos+1,len-1);
-    return getbitu(buff,pos,1)?-value:value;
-}
 /* decode NavIC/IRNSS ephemeris ----------------------------------------------*/
 static int decode_irn_eph(const uint8_t *buff, eph_t *eph)
 {
@@ -1299,7 +1293,6 @@ extern int init_raw(raw_t *raw, int format)
     obsd_t data0={{0}};
     eph_t  eph0 ={0,-1,-1};
     alm_t  alm0 ={0,-1};
-    geph_t geph0={0,-1};
     seph_t seph0={0};
     sbsmsg_t sbsmsg0={0};
     int i,j,ret=1;
@@ -1340,8 +1333,8 @@ extern int init_raw(raw_t *raw, int format)
         !(raw->obuf.data=(obsd_t *)malloc(sizeof(obsd_t)*MAXOBS))||
         !(raw->nav.eph  =(eph_t  *)malloc(sizeof(eph_t )*MAXSAT*2))||
         !(raw->nav.alm  =(alm_t  *)malloc(sizeof(alm_t )*MAXSAT))||
-        !(raw->nav.geph =(geph_t *)malloc(sizeof(geph_t)*NSATGLO))||
-        !(raw->nav.seph =(seph_t *)malloc(sizeof(seph_t)*NSATSBS*2))) {
+        !(NSATGLO>0&&(raw->nav.geph =(geph_t *)malloc(sizeof(geph_t)*NSATGLO)))||
+        !(NSATSBS>0&&(raw->nav.seph =(seph_t *)malloc(sizeof(seph_t)*NSATSBS*2)))) {
         free_raw(raw);
         return 0;
     }
@@ -1355,7 +1348,11 @@ extern int init_raw(raw_t *raw, int format)
     for (i=0;i<MAXOBS   ;i++) raw->obuf.data[i]=data0;
     for (i=0;i<MAXSAT*2 ;i++) raw->nav.eph  [i]=eph0;
     for (i=0;i<MAXSAT   ;i++) raw->nav.alm  [i]=alm0;
-    for (i=0;i<NSATGLO  ;i++) raw->nav.geph [i]=geph0;
+    for (i=0;i<NSATGLO  ;i++) {
+        raw->nav.geph[i].frq=get_glo_fcn_default(i+1);
+        raw->nav.geph[i].sat=satno(SYS_GLO,i+1);
+        raw->nav.glo_fcn[i] =get_glo_fcn_default(i+1)+8;
+    }
     for (i=0;i<NSATSBS*2;i++) raw->nav.seph [i]=seph0;
     raw->sta.name[0]=raw->sta.marker[0]='\0';
     raw->sta.antdes[0]=raw->sta.antsno[0]='\0';
@@ -1386,12 +1383,12 @@ extern void free_raw(raw_t *raw)
 {
     trace(3,"free_raw:\n");
     
-    free(raw->obs.data ); raw->obs.data =NULL; raw->obs.n =0;
-    free(raw->obuf.data); raw->obuf.data=NULL; raw->obuf.n=0;
-    free(raw->nav.eph  ); raw->nav.eph  =NULL; raw->nav.n =0;
-    free(raw->nav.alm  ); raw->nav.alm  =NULL; raw->nav.na=0;
-    free(raw->nav.geph ); raw->nav.geph =NULL; raw->nav.ng=0;
-    free(raw->nav.seph ); raw->nav.seph =NULL; raw->nav.ns=0;
+    if (raw->obs.data ) { free(raw->obs.data ); raw->obs.data =NULL; raw->obs.n =0; }
+    if (raw->obuf.data) { free(raw->obuf.data); raw->obuf.data=NULL; raw->obuf.n=0; }
+    if (raw->nav.eph  ) { free(raw->nav.eph  ); raw->nav.eph  =NULL; raw->nav.n =0; }
+    if (raw->nav.alm  ) { free(raw->nav.alm  ); raw->nav.alm  =NULL; raw->nav.na=0; }
+    if (raw->nav.geph ) { free(raw->nav.geph ); raw->nav.geph =NULL; raw->nav.ng=0; }
+    if (raw->nav.seph ) { free(raw->nav.seph ); raw->nav.seph =NULL; raw->nav.ns=0; }
     
     /* free receiver dependent data */
     switch (raw->format) {

@@ -444,7 +444,7 @@ static eph_t *seleph(gtime_t time, int sat, int iode, const nav_t *nav)
             sel=getseleph(SYS_GAL);
             if (sel==0&&!(nav->eph[i].code&(1<<9))) continue; /* I/NAV */
             if (sel==1&&!(nav->eph[i].code&(1<<8))) continue; /* F/NAV */
-            if (timediff(nav->eph[i].toe,time)>=0.0) continue; /* AOD<=0 */
+            /*if (timediff(nav->eph[i].toe,time)>=0.0) continue;*/ /* AOD<=0 */
         }
         if ((t=fabs(timediff(nav->eph[i].toe,time)))>tmax) continue;
         if (iode>=0) return nav->eph+i;
@@ -499,7 +499,7 @@ static seph_t *selseph(gtime_t time, int sat, const nav_t *nav)
     return nav->seph+j;
 }
 /* satellite clock with broadcast ephemeris ----------------------------------*/
-static int ephclk(gtime_t time, gtime_t teph, int sat, const nav_t *nav,
+extern int ephclk(gtime_t time, gtime_t teph, int sat, const nav_t *nav,
                   double *dts)
 {
     eph_t  *eph;
@@ -528,7 +528,7 @@ static int ephclk(gtime_t time, gtime_t teph, int sat, const nav_t *nav,
     return 1;
 }
 /* satellite position and clock by broadcast ephemeris -----------------------*/
-static int ephpos(gtime_t time, gtime_t teph, int sat, const nav_t *nav,
+extern int ephpos(gtime_t time, gtime_t teph, int sat, const nav_t *nav,
                   int iode, double *rs, double *dts, double *var, int *svh)
 {
     eph_t  *eph;
@@ -576,7 +576,7 @@ static int ephpos(gtime_t time, gtime_t teph, int sat, const nav_t *nav,
 static int satpos_sbas(gtime_t time, gtime_t teph, int sat, const nav_t *nav,
                         double *rs, double *dts, double *var, int *svh)
 {
-    const sbssatp_t *sbs;
+    const sbssatp_t *sbs=nav->sbssat.sat;
     int i;
     
     trace(4,"satpos_sbas: time=%s sat=%2d\n",time_str(time,3),sat);

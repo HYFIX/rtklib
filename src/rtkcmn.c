@@ -147,7 +147,8 @@
 #include <stdarg.h>
 #include <ctype.h>
 #include <errno.h>
-#ifndef WIN32
+#if defined(_WIN32) || defined(WIN32)
+#else
 #include <dirent.h>
 #include <time.h>
 #include <sys/time.h>
@@ -259,7 +260,7 @@ static char *obscodes[]={       /* observation code strings */
     "5B","5C","9A","9B","9C", "9X","1D","5D","5P","5Z", /* 50-59 */
     "6E","7D","7P","7Z","8D", "8P","4A","4B","4X",""    /* 60-69 */
 };
-static char codepris[7][MAXFREQ][16]={  /* code priority for each freq-index */
+static char codepris[8][MAXFREQ][16]={  /* code priority for each freq-index */
    /*    0         1          2          3         4         5     */
     {"CPYWMNSL","PYWCMNDLSX","IQX"     ,""       ,""       ,""      ,""}, /* GPS */
     {"CPABX"   ,"PCABX"     ,"IQX"     ,""       ,""       ,""      ,""}, /* GLO */
@@ -267,7 +268,8 @@ static char codepris[7][MAXFREQ][16]={  /* code priority for each freq-index */
     {"CLSXZ"   ,"LSX"       ,"IQXDPZ"  ,"LSXEZ"  ,""       ,""      ,""}, /* QZS */
     {"C"       ,"IQX"       ,""        ,""       ,""       ,""      ,""}, /* SBS */
     {"IQXDPAN" ,"IQXDPZ"    ,"DPX"     ,"IQXA"   ,"DPX"    ,""      ,""}, /* BDS */
-    {"ABCX"    ,"ABCX"      ,""        ,""       ,""       ,""      ,""}  /* IRN */
+    {"ABCX"    ,"ABCX"      ,""        ,""       ,""       ,""      ,""}, /* IRN */
+    {"X"       ,"X"         ,""        ,""       ,""       ,""      ,""}  /* LEO */
 };
 static fatalfunc_t *fatalfunc=NULL; /* fatal callback function */
 
@@ -461,7 +463,7 @@ extern int satsys(int sat, int *prn)
 }
 /* satellite id to satellite number --------------------------------------------
 * convert satellite id to satellite number
-* args   : char   *id       I   satellite id (nn,Gnn,Rnn,Enn,Jnn,Cnn,Inn or Snn)
+* args   : char   *id       I   satellite id (nn,Gnn,Rnn,Enn,Jnn,Cnn,Inn,Xnn or Snn)
 * return : satellite number (0: error)
 * notes  : 120-142 and 193-199 are also recognized as sbas and qzss
 *-----------------------------------------------------------------------------*/
@@ -474,6 +476,7 @@ extern int satid2no(const char *id)
         if      (MINPRNGPS<=prn&&prn<=MAXPRNGPS) sys=SYS_GPS;
         else if (MINPRNSBS<=prn&&prn<=MAXPRNSBS) sys=SYS_SBS;
         else if (MINPRNQZS<=prn&&prn<=MAXPRNQZS) sys=SYS_QZS;
+        else if (MINPRNLEO<=prn&&prn<=MAXPRNLEO) sys=SYS_LEO;
         else return 0;
         return satno(sys,prn);
     }
@@ -486,7 +489,7 @@ extern int satid2no(const char *id)
         case 'J': sys=SYS_QZS; prn+=MINPRNQZS-1; break;
         case 'C': sys=SYS_CMP; prn+=MINPRNCMP-1; break;
         case 'I': sys=SYS_IRN; prn+=MINPRNIRN-1; break;
-        case 'L': sys=SYS_LEO; prn+=MINPRNLEO-1; break;
+        case 'X': sys=SYS_LEO; prn+=MINPRNLEO-1; break;
         case 'S': sys=SYS_SBS; prn+=100; break;
         default: return 0;
     }
@@ -508,7 +511,7 @@ extern void satno2id(int sat, char *id)
         case SYS_QZS: sprintf(id,"J%02d",prn-MINPRNQZS+1); return;
         case SYS_CMP: sprintf(id,"C%02d",prn-MINPRNCMP+1); return;
         case SYS_IRN: sprintf(id,"I%02d",prn-MINPRNIRN+1); return;
-        case SYS_LEO: sprintf(id,"L%02d",prn-MINPRNLEO+1); return;
+        case SYS_LEO: sprintf(id,"X%02d",prn-MINPRNLEO+1); return;
         case SYS_SBS: sprintf(id,"%03d" ,prn); return;
     }
     strcpy(id,"");
@@ -687,6 +690,17 @@ static int code2freq_IRN(uint8_t code, double *freq)
     }
     return -1;
 }
+/* LEO/XONA obs code to frequency ------------------------------------------------*/
+static int code2freq_LEO(uint8_t code, double *freq)
+{
+    char *obs=code2obs(code);
+    
+    switch (obs[0]) {
+        case '1': *freq=FREQX1; return 0; /* X1 */
+        case '5': *freq=FREQX5; return 1; /* X5 */
+    }
+    return -1;
+}
 /* system and obs code to frequency index --------------------------------------
 * convert system and obs code to frequency index
 * args   : int    sys       I   satellite system (SYS_???)
@@ -701,6 +715,7 @@ static int code2freq_IRN(uint8_t code, double *freq)
 *            SBAS      L1     -    L5     -     -
 *            BDS       B1    B2    B2a   B3   B2ab (B1=B1I,B1C,B2=B2I,B2b)
 *            NavIC     L5     S     -     -     - 
+*            LEO       X1    X5     -     -     -
 *-----------------------------------------------------------------------------*/
 extern int code2idx(int sys, uint8_t code)
 {
@@ -714,6 +729,7 @@ extern int code2idx(int sys, uint8_t code)
         case SYS_SBS: return code2freq_SBS(code,&freq);
         case SYS_CMP: return code2freq_BDS(code,&freq);
         case SYS_IRN: return code2freq_IRN(code,&freq);
+        case SYS_LEO: return code2freq_LEO(code,&freq);
     }
     return -1;
 }
@@ -736,8 +752,59 @@ extern double code2freq(int sys, uint8_t code, int fcn)
         case SYS_SBS: (void)code2freq_SBS(code,&freq); break;
         case SYS_CMP: (void)code2freq_BDS(code,&freq); break;
         case SYS_IRN: (void)code2freq_IRN(code,&freq); break;
+        case SYS_LEO: (void)code2freq_LEO(code,&freq); break;
     }
     return freq;
+}
+/* default GLONASS frequency channel number 
+| Plane  1/slot | 01 | 02 | 03 | 04 | 05 | 06 | 07 | 08 |
+|       Channel |  1 | -4 |  5 |  6 |  1 | -4 |  5 |  6 |
+|---------------|----|----|----|----|----|----|----|----|
+| Plane  2/slot | 09 | 10 | 11 | 12 | 13 | 14 | 15 | 16 |
+|       Channel | -2 | -7 |  0 | -1 | -2 | -7 |  0 | -1 |
+|---------------|----|----|----|----|----|----|----|----|
+| Plane  3/slot | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 |
+|       Channel |  4 | -3 |  3 |  2 |  4 | -3 |  3 |  2 | -5 | -6 | 
+|---------------|----|----|----|----|----|----|----|----|
+*/
+extern int get_glo_fcn_default(int prn)
+{
+    int ret = -8;
+    /* plane 1 */
+         if (prn == 1) ret = 1;
+    else if (prn == 2) ret =-4;
+    else if (prn == 3) ret = 5;
+    else if (prn == 4) ret = 6;
+
+    else if (prn == 5) ret = 1;
+    else if (prn == 6) ret =-4;
+    else if (prn == 7) ret = 5;
+    else if (prn == 8) ret = 6;
+    /* plane 2 */
+    else if (prn == 9) ret =-2;
+    else if (prn ==10) ret =-7;
+    else if (prn ==11) ret = 0;
+    else if (prn ==12) ret =-1;
+
+    else if (prn ==13) ret =-2;
+    else if (prn ==14) ret =-7;
+    else if (prn ==15) ret = 0;
+    else if (prn ==16) ret =-1;
+    /* plane 3 */
+    else if (prn ==17) ret = 4;
+    else if (prn ==18) ret =-3;
+    else if (prn ==19) ret = 3;
+    else if (prn ==20) ret = 2;
+
+    else if (prn ==21) ret = 4;
+    else if (prn ==22) ret =-3;
+    else if (prn ==23) ret = 3;
+    else if (prn ==24) ret = 2;
+
+    else if (prn ==25) ret =-5;
+    else if (prn ==26) ret =-6;
+
+    return ret;
 }
 /* satellite and obs code to frequency -----------------------------------------
 * convert satellite and obs code to carrier frequency
@@ -753,17 +820,19 @@ extern double sat2freq(int sat, uint8_t code, const nav_t *nav)
     sys=satsys(sat,&prn);
     
     if (sys==SYS_GLO) {
-        if (!nav) return 0.0;
-        for (i=0;i<nav->ng;i++) {
-            if (nav->geph[i].sat==sat) break;
-        }
-        if (i<nav->ng) {
-            fcn=nav->geph[i].frq;
-        }
-        else if (nav->glo_fcn[prn-1]>0) {
-            fcn=nav->glo_fcn[prn-1]-8;
-        }
-        else return 0.0;
+        if (nav) {
+			for (i=0;i<nav->ng;i++) {
+				if (nav->geph[i].sat==sat) break;
+			}
+			if (i<nav->ng) {
+				fcn=nav->geph[i].frq;
+			}
+			else if (nav->glo_fcn[prn-1]>0) {
+				fcn=nav->glo_fcn[prn-1]-8;
+			}
+		}
+        if (fcn<-7||fcn>6) fcn=get_glo_fcn_default(prn);
+        if (fcn<-7||fcn>6) return 0.0;
     }
     return code2freq(sys,code,fcn);
 }
@@ -787,6 +856,7 @@ extern void setcodepri(int sys, int idx, const char *pri)
     if (sys&SYS_SBS) strcpy(codepris[4][idx],pri);
     if (sys&SYS_CMP) strcpy(codepris[5][idx],pri);
     if (sys&SYS_IRN) strcpy(codepris[6][idx],pri);
+    if (sys&SYS_LEO) strcpy(codepris[7][idx],pri);
 }
 /* get code priority -----------------------------------------------------------
 * get code priority for multiple codes in a frequency
@@ -809,6 +879,7 @@ extern int getcodepri(int sys, uint8_t code, const char *opt)
         case SYS_SBS: i=4; optstr="-SL%2s"; break;
         case SYS_CMP: i=5; optstr="-CL%2s"; break;
         case SYS_IRN: i=6; optstr="-IL%2s"; break;
+        case SYS_LEO: i=7; optstr="-XL%2s"; break;
         default: return 0;
     }
     if ((j=code2idx(sys,code))<0) return 0;
@@ -1585,7 +1656,7 @@ extern gtime_t timeget(void)
 {
     gtime_t time;
     double ep[6]={0};
-#ifdef WIN32
+#if defined(_WIN32) || defined(WIN32)
     SYSTEMTIME ts;
     
     GetSystemTime(&ts); /* utc */
@@ -1847,7 +1918,7 @@ extern int adjgpsweek(int week)
 *-----------------------------------------------------------------------------*/
 extern uint32_t tickget(void)
 {
-#ifdef WIN32
+#if defined(_WIN32) || defined(WIN32)
     return (uint32_t)timeGetTime();
 #else
     struct timespec tp={0};
@@ -1866,7 +1937,7 @@ extern uint32_t tickget(void)
     gettimeofday(&tv,NULL);
     return tv.tv_sec*1000u+tv.tv_usec/1000u;
 #endif
-#endif /* WIN32 */
+#endif
 }
 /* sleep ms --------------------------------------------------------------------
 * sleep ms
@@ -1875,7 +1946,7 @@ extern uint32_t tickget(void)
 *-----------------------------------------------------------------------------*/
 extern void sleepms(int ms)
 {
-#ifdef WIN32
+#if defined(_WIN32) || defined(WIN32)
     if (ms<5) Sleep(1); else Sleep(ms);
 #else
     struct timespec ts;
@@ -3237,7 +3308,7 @@ extern void traceb  (int level, const uint8_t *p, int n) {}
 *-----------------------------------------------------------------------------*/
 extern int execcmd(const char *cmd)
 {
-#ifdef WIN32
+#if defined(_WIN32) || defined(WIN32)
     PROCESS_INFORMATION info;
     STARTUPINFO si={0};
     DWORD stat;
@@ -3272,7 +3343,7 @@ extern int expath(const char *path, char *paths[], int nmax)
 {
     int i,j,n=0;
     char tmp[1024];
-#ifdef WIN32
+#if defined(_WIN32) || defined(WIN32)
     WIN32_FIND_DATA file;
     HANDLE h;
     char dir[1024]="",*p;
@@ -3337,7 +3408,7 @@ static int mkdir_r(const char *dir)
 {
     char pdir[1024],*p;
 
-#ifdef WIN32
+#if defined(_WIN32) || defined(WIN32)
     HANDLE h;
     WIN32_FIND_DATA data;
     
@@ -3985,7 +4056,7 @@ extern int rtk_uncompress(const char *file, char *uncfile)
         strcpy(uncfile,tmpfile); uncfile[p-tmpfile]='\0';
         strcpy(buff,tmpfile);
         fname=buff;
-#ifdef WIN32
+#if defined(_WIN32) || defined(WIN32)
         if ((p=strrchr(buff,'\\'))) {
             *p='\0'; dir=fname; fname=p+1;
         }

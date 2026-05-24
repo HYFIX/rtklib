@@ -124,7 +124,7 @@
 #define SQR(x)      ((x)*(x))
 
 #define NAVEXP      "D"                 /* exponent letter in RINEX NAV */
-#define NUMSYS      7                   /* number of systems */
+#define NUMSYS      8                   /* number of systems */
 #define MAXRNXLEN   (16*MAXOBSTYPE+4)   /* max RINEX record length */
 #define MAXPOSHEAD  1024                /* max head line position */
 #define MINFREQ_GLO -7                  /* min frequency number GLONASS */
@@ -132,9 +132,9 @@
 #define NINCOBS     262144              /* incremental number of obs data */
 
 static const int navsys[]={             /* satellite systems */
-    SYS_GPS,SYS_GLO,SYS_GAL,SYS_QZS,SYS_SBS,SYS_CMP,SYS_IRN,0
+    SYS_GPS,SYS_GLO,SYS_GAL,SYS_QZS,SYS_SBS,SYS_CMP,SYS_IRN,SYS_LEO,0
 };
-static const char syscodes[]="GREJSCI"; /* satellite system codes */
+static const char syscodes[]="GREJSCIX"; /* satellite system codes */
 
 static const char obscodes[]="CLDS";    /* observation type codes */
 
@@ -205,6 +205,7 @@ static int sat2code(int sat, char *code)
         case SYS_QZS: sprintf(code,"J%02d",prn-MINPRNQZS+1); break;
         case SYS_CMP: sprintf(code,"C%02d",prn-MINPRNCMP+1); break;
         case SYS_IRN: sprintf(code,"I%02d",prn-MINPRNIRN+1); break;
+        case SYS_LEO: sprintf(code,"X%02d",prn-MINPRNLEO+1); break;
         default: return 0;
     }
     return 1;
@@ -237,7 +238,7 @@ static int sisa_index(double value)
     else if (value<=0.5) return (int)(value/0.01);
     else if (value<=1.0) return (int)((value-0.5)/0.02)+50;
     else if (value<=2.0) return (int)((value-1.0)/0.04)+75;
-    return ((int)(value-2.0)/0.16)+100;
+    return (int)((value-2.0)/0.16)+100;
 }
 /* initialize station parameter ----------------------------------------------*/
 static void init_sta(sta_t *sta)
@@ -358,7 +359,8 @@ static void decode_obsh(FILE *fp, char *buff, double ver, int *tsys,
         "CXXX   ",  /* QZS: L1256___ */
         "C X    ",  /* SBS: L1_5____ */
         "XIXIIX ",  /* BDS: L125678_ */
-        "  A   A"   /* IRN: L__5___9 */
+        "  A   A",  /* IRN: L__5___9 */
+        "X X    ",  /* LEO: L1_5____ */
     };
     double del[3];
     int i,j,k,n,nt,prn,fcn;
@@ -1616,6 +1618,108 @@ extern int readrnxt(const char *file, int rcv, gtime_t ts, gtime_t te,
     
     return stat;
 }
+/* read rtcm file --------------------------------------------*/
+static int readrtcmfile(const char *file, gtime_t ts, gtime_t te, gtime_t tr, double tint,
+                       const char *opt, int flag, int index, char *type,
+                       obs_t *obs, nav_t *nav, sta_t *sta)
+{
+    FILE *fp;
+    int stat=0,data=0,ret=0,i=0,sat=0,sys=0,prn=0;
+    rtcm_t *rtcm=(rtcm_t*)malloc(sizeof(rtcm_t));
+    eph_t * eph=NULL;
+    geph_t*geph=NULL;
+
+    trace(3,"readrtcmfile: file=%s flag=%d index=%d\n",file,flag,index);
+    
+    if (sta) init_sta(sta);
+    
+    if (rtcm==NULL||!(fp=fopen(file,"rb"))) {
+        trace(2,"rtcm file open error: %s\n",file);
+        return 0;
+    }
+    /* read rtcm file */
+    init_rtcm(rtcm);
+    rtcm->time=rtcm->time_s=tr;
+    while (fp&&!feof(fp)&&(data=fgetc(fp))!=EOF) {
+        ret=input_rtcm3(rtcm,data);
+        if (ret==1) {
+
+            /* screen data by time */
+            if (rtcm->obs.n>0&&!screent(rtcm->obs.data[0].time,ts,te,tint)) continue;
+        
+            for (i=0;i<rtcm->obs.n;i++) {
+                rtcm->obs.data[i].rcv=(uint8_t)index;
+                /* save obs data */
+                if ((stat=addobsdata(obs,rtcm->obs.data+i))<0) break;
+            }
+#if 0
+            for (i=0;i<rtcm->obs.n;++i) {
+                sys=satsys(rtcm->obs.data[i].sat,&prn);
+                printf("%3i,%3i,%3i,%s", rtcm->obs.data[i].rcv, sys, prn, time_str(rtcm->obs.data[i].time, 3));
+                for (f=0;f<NFREQ+NEXOBS;++f) {
+                    if (rtcm->obs.data[i].code[f])
+                        printf(",%s,%14.4f,%14.4f,%3i", code2obs(rtcm->obs.data[i].code[f]), rtcm->obs.data[i].P[f], rtcm->obs.data[i].L[f], rtcm->obs.data[i].SNR[f]);
+                }
+                printf("\n");
+            }
+#endif
+        } else if (ret==2) {
+            if ((sys=satsys((sat=rtcm->ephsat),&prn))==SYS_GLO) { /* GLO EPH */
+                geph=rtcm->nav.geph+(prn-1);
+                stat=add_geph(nav,geph);
+            } else if (sys==SYS_GPS||sys==SYS_CMP||sys==SYS_QZS||sys==SYS_GAL||sys==SYS_IRN) {
+                eph=rtcm->nav.eph+(sat-1+MAXSAT*rtcm->ephset);
+                stat=add_eph(nav,eph);
+            }
+        } else if (ret==5) {
+            if (sta) *sta=rtcm->sta;
+        }
+    }
+
+    fclose(fp);
+    free_rtcm(rtcm);
+    free(rtcm);
+    
+    return stat;
+}
+/* read RTCM files ----------- -----------------------------------------------*/
+extern int readrtcm(const char *file, int rcv, gtime_t ts, gtime_t te, gtime_t tr,
+                    double tint, const char *opt, obs_t *obs, nav_t *nav,
+                    sta_t *sta)
+{
+    int i,n,stat=0;
+    const char *p;
+    char type=' ',*files[MAXEXFILE]={0};
+    
+    trace(3,"readrtcm: file=%s rcv=%d\n",file,rcv);
+    
+    if (!*file) {
+        return 0;
+    }
+    for (i=0;i<MAXEXFILE;i++) {
+        if (!(files[i]=(char *)malloc(1024))) {
+            for (i--;i>=0;i--) free(files[i]);
+            return -1;
+        }
+    }
+    /* expand wild-card */
+    if ((n=expath(file,files,MAXEXFILE))<=0) {
+        for (i=0;i<MAXEXFILE;i++) free(files[i]);
+        return 0;
+    }
+    /* read rtcm files */
+    for (i=0;i<n&&stat>=0;i++) {
+        stat=readrtcmfile(files[i],ts,te,tr,tint,opt,0,rcv,&type,obs,nav,sta);
+    }
+    /* if station name empty, set 4-char name from file head */
+    if (sta) {
+        if (!(p=strrchr(file,FILEPATHSEP))) p=file-1;
+        if (!*sta->name) setstr(sta->name,p+1,4);
+    }
+    for (i=0;i<MAXEXFILE;i++) free(files[i]);
+    
+    return stat;
+}
 extern int readrnx(const char *file, int rcv, const char *opt, obs_t *obs,
                    nav_t *nav, sta_t *sta)
 {
@@ -1717,12 +1821,12 @@ extern int init_rnxctr(rnxctr_t *rnx)
     gtime_t time0={0};
     obsd_t data0={{0}};
     eph_t  eph0={0,-1,-1};
-    geph_t geph0={0,-1};
     seph_t seph0={0};
+    sta_t sta0={0};
     int i,j;
     
     trace(3,"init_rnxctr:\n");
-    
+    rnx->sta=sta0;
     rnx->obs.data=NULL;
     rnx->nav.eph =NULL;
     rnx->nav.geph=NULL;
@@ -1730,22 +1834,26 @@ extern int init_rnxctr(rnxctr_t *rnx)
     
     if (!(rnx->obs.data=(obsd_t *)malloc(sizeof(obsd_t)*MAXOBS   ))||
         !(rnx->nav.eph =(eph_t  *)malloc(sizeof(eph_t )*MAXSAT*2 ))||
-        !(rnx->nav.geph=(geph_t *)malloc(sizeof(geph_t)*NSATGLO  ))||
-        !(rnx->nav.seph=(seph_t *)malloc(sizeof(seph_t)*NSATSBS*2))) {
+        !(MAXPRNGLO>0&&(rnx->nav.geph=(geph_t *)malloc(sizeof(geph_t)*NSATGLO  )))||
+        !(NSATSBS  >0&&(rnx->nav.seph=(seph_t *)malloc(sizeof(seph_t)*NSATSBS*2)))) {
         free_rnxctr(rnx);
         return 0;
     }
     rnx->time=time0;
     rnx->ver=0.0;
     rnx->sys=rnx->tsys=0;
-    for (i=0;i<6;i++) for (j=0;j<MAXOBSTYPE;j++) rnx->tobs[i][j][0]='\0';
+    for (i=0;i<8;i++) for (j=0;j<MAXOBSTYPE;j++) rnx->tobs[i][j][0]='\0';
     rnx->obs.n=0;
     rnx->nav.n=MAXSAT*2;
     rnx->nav.ng=NSATGLO;
     rnx->nav.ns=NSATSBS*2;
     for (i=0;i<MAXOBS   ;i++) rnx->obs.data[i]=data0;
     for (i=0;i<MAXSAT*2 ;i++) rnx->nav.eph [i]=eph0;
-    for (i=0;i<NSATGLO  ;i++) rnx->nav.geph[i]=geph0;
+    for (i=0;i<NSATGLO  ;i++) {
+        rnx->nav.geph[i].frq=get_glo_fcn_default(i+1);
+        rnx->nav.geph[i].sat=satno(SYS_GLO,i+1);
+        rnx->nav.glo_fcn[i] =get_glo_fcn_default(i+1)+8;
+    }
     for (i=0;i<NSATSBS*2;i++) rnx->nav.seph[i]=seph0;
     rnx->ephsat=rnx->ephset=0;
     rnx->opt[0]='\0';
@@ -1761,10 +1869,10 @@ extern void free_rnxctr(rnxctr_t *rnx)
 {
     trace(3,"free_rnxctr:\n");
     
-    free(rnx->obs.data); rnx->obs.data=NULL; rnx->obs.n =0;
-    free(rnx->nav.eph ); rnx->nav.eph =NULL; rnx->nav.n =0;
-    free(rnx->nav.geph); rnx->nav.geph=NULL; rnx->nav.ng=0;
-    free(rnx->nav.seph); rnx->nav.seph=NULL; rnx->nav.ns=0;
+    if (rnx->obs.data) { free(rnx->obs.data); rnx->obs.data=NULL; rnx->obs.n =0; }
+    if (rnx->nav.eph ) { free(rnx->nav.eph ); rnx->nav.eph =NULL; rnx->nav.n =0; }
+    if (rnx->nav.geph) { free(rnx->nav.geph); rnx->nav.geph=NULL; rnx->nav.ng=0; }
+    if (rnx->nav.seph) { free(rnx->nav.seph); rnx->nav.seph=NULL; rnx->nav.ns=0; }
 }
 /* open RINEX data -------------------------------------------------------------
 * fetch next RINEX message and input a messsage from file
@@ -1943,7 +2051,8 @@ static void outrnx_phase_shift(FILE *fp, const rnxopt_t *opt, const nav_t *nav)
         {CODE_L1C,CODE_L2S,CODE_L5I,CODE_L5D,CODE_L6S,0}, /* QZS */
         {CODE_L1C,CODE_L5I,0},                            /* SBS */
         {CODE_L2I,CODE_L1D,CODE_L5D,CODE_L7I,CODE_L7D,CODE_L8D,CODE_L6I,0}, /* BDS */
-        {CODE_L5A,CODE_L9A,0}                             /* IRN */
+        {CODE_L5A,CODE_L9A,0},                            /* IRN */
+        {CODE_L1X,CODE_L5X,0}                             /* LEO */
     };
     const char *label="SYS / PHASE SHIFT";
     char obs[8];
@@ -2208,6 +2317,7 @@ extern int outrnxobsb(FILE *fp, const rnxopt_t *opt, const obsd_t *obs, int n,
             case SYS_SBS: s[ns]=4; break;
             case SYS_CMP: s[ns]=5; break;
             case SYS_IRN: s[ns]=6; break;
+            case SYS_LEO: s[ns]=7; break;
         }
         if (!opt->nobs[(opt->rnxver<=299)?0:s[ns]]) continue;
         ind[ns++]=i;

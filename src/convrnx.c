@@ -47,7 +47,7 @@
 #include "rtklib.h"
 
 #define NOUTFILE        9       /* number of output files */
-#define NSATSYS         7       /* number of satellite systems */
+#define NSATSYS         8       /* number of satellite systems */
 #define TSTARTMARGIN    60.0    /* time margin for file name replacement */
 
 #define EVENT_STARTMOVE 2       /* rinex event start moving antenna */
@@ -90,7 +90,7 @@ typedef struct {                /* stream file type */
 
 /* global variables ----------------------------------------------------------*/
 static const int navsys[]={     /* system codes */
-    SYS_GPS,SYS_GLO,SYS_GAL,SYS_QZS,SYS_SBS,SYS_CMP,SYS_IRN,0
+    SYS_GPS,SYS_GLO,SYS_GAL,SYS_QZS,SYS_SBS,SYS_CMP,SYS_IRN,SYS_LEO,0
 };
 static const char vercode[][MAXCODE]={ /* supported obs-type by RINEX version */
   /* 0........1.........2.........3.........4.........5.........6........          */
@@ -102,7 +102,8 @@ static const char vercode[][MAXCODE]={ /* supported obs-type by RINEX version */
     "2.....22...22..222.....222......2422....................4444........", /* QZS */
     "0......................000..........................................", /* SBS */
     ".4...4...4.4.....1.......41114..1.....41111............444..44444...", /* BDS */
-    ".........................3......................3333333............."  /* IRN */
+    ".........................3......................3333333.............", /* IRN */
+    "...........0.............0.........................................."  /* LEO */
 };
 /* convert RINEX obs-type ver.3 -> ver.2 -------------------------------------*/
 static void convcode(int rnxver, int sys, char *type)
@@ -776,9 +777,9 @@ static int scan_file(char **files, int nf, rnxopt_t *opt, strfile_t *str,
             }
             if (++c%11) continue;
             
-            sprintf(msg,"scanning: %s %s%s%s%s%s%s%s",time_str(str->time,0),
+            sprintf(msg,"scanning: %s %s%s%s%s%s%s%s%s",time_str(str->time,0),
                     n[0]?"G":"",n[1]?"R":"",n[2]?"E":"",n[3]?"J":"",
-                    n[4]?"S":"",n[5]?"C":"",n[6]?"I":"");
+                    n[4]?"S":"",n[5]?"C":"",n[6]?"I":"",n[7]?"X":"");
             if ((abort=showmsg(msg))) break;
         }
         close_strfile(str);
@@ -894,7 +895,7 @@ static void outrnxevent(FILE *fp, const rnxopt_t *opt, gtime_t time, int event,
                         const stas_t *stas, int staid)
 {
     const stas_t *p=NULL,*q;
-    double ep[6],pos[3],enu[3],del[3];
+    double ep[6]={0},pos[3]={0},enu[3]={0},del[3]={0};
 
     trace(3,"outrnxevent: event=%d\n",event);
     
@@ -1230,7 +1231,7 @@ static int convrnx_s(int sess, int format, rnxopt_t *opt, const char *file,
     int i,j,nf,type,n[NOUTFILE+1]={0},mask[MAXEXFILE]={0},staid=-1,abort=0;
     char path[1024],*paths[NOUTFILE],s[NOUTFILE][1024];
     char *epath[MAXEXFILE]={0},*staname=*opt->staid?opt->staid:"0000";
-    
+    gtime_t last_out_time = { 0 };
     trace(3,"convrnx_s: sess=%d format=%d file=%s ofile=%s %s %s %s %s %s %s "
           "%s %s\n",sess,format,file,ofile[0],ofile[1],ofile[2],ofile[3],
           ofile[4],ofile[5],ofile[6],ofile[7],ofile[8]);
@@ -1306,7 +1307,7 @@ static int convrnx_s(int sess, int format, rnxopt_t *opt, const char *file,
             
             if (opt->ts.time&&timediff(str->time,opt->ts)<-opt->ttol) continue;
             if (opt->te.time&&timediff(str->time,opt->te)>-opt->ttol) break;
-            
+            if (type==1&&str->obs->n>0&&fabs(timediff(str->obs->data[0].time,last_out_time))<0.001) type=0; /* duplicated epoch */
             /* convert message */
             switch (type) {
                 case  1: convobs(ofp,opt,str,n,tend,&staid); break;
@@ -1318,6 +1319,7 @@ static int convrnx_s(int sess, int format, rnxopt_t *opt, const char *file,
             if (type==1&&!opt->autopos&&norm(opt->apppos,3)<=0.0) {
                 setopt_apppos(str,opt);
             }
+            if (type==1&&str->obs->n>0) last_out_time=str->obs->data[0].time;
         }
         /* close stream file */
         close_strfile(str);

@@ -3,9 +3,12 @@
 *.obs
 *.ini
 *.local
+.vs
+*.user
 Release
 Release_Build
 Debug
 Debug_Build
 __history
 __astcache
+CMakeFiles

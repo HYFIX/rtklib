@@ -1282,7 +1282,7 @@ extern int outnmea_gga(uint8_t *buff, const sol_t *sol)
 {
     gtime_t time;
     double h,ep[6],pos[3],dms1[3],dms2[3],dop=1.0;
-    int solq,refid=0;
+    int solq,refid=sol->staid;
     char *p=(char *)buff,*q,sum;
     
     trace(3,"outnmea_gga:\n");

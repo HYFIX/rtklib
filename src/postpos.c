@@ -119,6 +119,11 @@ static void outrpos(FILE *fp, const double *r, const solopt_t *opt)
         fprintf(fp,"%14.4f%s%14.4f%s%14.4f",r[0],sep,r[1],sep,r[2]);
     }
 }
+#if defined(_WIN32) || defined(WIN32)
+#define LINEFEED    '\r'
+#else
+#define LINEFEED    ' '
+#endif
 /* output header -------------------------------------------------------------*/
 static void outheader(FILE *fp, char **file, int n, const prcopt_t *popt,
                       const solopt_t *sopt)
@@ -136,17 +141,17 @@ static void outheader(FILE *fp, char **file, int n, const prcopt_t *popt,
     }
     if (sopt->outhead) {
         if (!*sopt->prog) {
-            fprintf(fp,"%s program   : RTKLIB ver.%s\n",COMMENTH,VER_RTKLIB);
+            fprintf(fp,"%s program   : RTKLIB ver.%s%c\n",COMMENTH,VER_RTKLIB,LINEFEED);
         }
         else {
-            fprintf(fp,"%s program   : %s\n",COMMENTH,sopt->prog);
+            fprintf(fp,"%s program   : %s%c\n",COMMENTH,sopt->prog,LINEFEED);
         }
         for (i=0;i<n;i++) {
-            fprintf(fp,"%s inp file  : %s\n",COMMENTH,file[i]);
+            fprintf(fp,"%s inp file  : %s%c\n",COMMENTH,file[i],LINEFEED);
         }
         for (i=0;i<obss.n;i++)    if (obss.data[i].rcv==1) break;
         for (j=obss.n-1;j>=0;j--) if (obss.data[j].rcv==1) break;
-        if (j<i) {fprintf(fp,"\n%s no rover obs data\n",COMMENTH); return;}
+        if (j<i) {fprintf(fp,"%c\n%s no rover obs data%c\n",LINEFEED,COMMENTH,LINEFEED); return;}
         ts=obss.data[i].time;
         te=obss.data[j].time;
         t1=time2gpst(ts,&w1);
@@ -157,8 +162,8 @@ static void outheader(FILE *fp, char **file, int n, const prcopt_t *popt,
         if (sopt->times==2) te=timeadd(te,9*3600.0);
         time2str(ts,s2,1);
         time2str(te,s3,1);
-        fprintf(fp,"%s obs start : %s %s (week%04d %8.1fs)\n",COMMENTH,s2,s1[sopt->times],w1,t1);
-        fprintf(fp,"%s obs end   : %s %s (week%04d %8.1fs)\n",COMMENTH,s3,s1[sopt->times],w2,t2);
+        fprintf(fp,"%s obs start : %s %s (week%04d %8.1fs)%c\n",COMMENTH,s2,s1[sopt->times],w1,t1,LINEFEED);
+        fprintf(fp,"%s obs end   : %s %s (week%04d %8.1fs)%c\n",COMMENTH,s3,s1[sopt->times],w2,t2,LINEFEED);
     }
     if (sopt->outopt) {
         outprcopt(fp,popt);
@@ -166,9 +171,9 @@ static void outheader(FILE *fp, char **file, int n, const prcopt_t *popt,
     if (PMODE_DGPS<=popt->mode&&popt->mode<=PMODE_FIXED&&popt->mode!=PMODE_MOVEB) {
         fprintf(fp,"%s ref pos   :",COMMENTH);
         outrpos(fp,popt->rb,sopt);
-        fprintf(fp,"\n");
+        fprintf(fp,"%c\n",LINEFEED);
     }
-    if (sopt->outhead||sopt->outopt) fprintf(fp,"%s\n",COMMENTH);
+    if (sopt->outhead||sopt->outopt) fprintf(fp,"%s%c\n",COMMENTH,LINEFEED);
     
     outsolhead(fp,sopt);
 }
@@ -614,6 +619,7 @@ static int readobsnav(gtime_t ts, gtime_t te, double ti, char **infile,
         }
         /* read rinex obs and nav file */
         if (readrnxt(infile[i],rcv,ts,te,ti,prcopt->rnxopt[rcv<=1?0:1],obs,nav,
+                     rcv<=2?sta+rcv-1:NULL)<0||readrtcm(infile[i],rcv,ts,te,prcopt->tr,ti,prcopt->rnxopt[rcv<=1?0:1],obs,nav,
                      rcv<=2?sta+rcv-1:NULL)<0) {
             checkbrk("error : insufficient memory");
             trace(1,"insufficient memory\n");

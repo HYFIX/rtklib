@@ -268,3 +268,31 @@ UPDATE HISTORY
         QT ported APs are just moved to RTKLIB/app/qtapp but not maintained.
         Documents in RTKLIB/doc are not updated.
 
+2026/05/08  2.4.3 b35
+   supoort convbin and rnx2rtkp CMakeLists.txt
+   support convbin and rnx2rtkp vs projects
+   support BDS signals in rtcm3.c
+   support staid in sol_t struct in rtklib.h, solution.c
+   support rtcm file (readrtcm) in rnx2rtkp, rtklib.h (tr in prcopt_t struct in rtklib.h)
+   support LEO/XONA X1 and X5
+   disable console printf at search in lambda.c
+   disable galileo check at seleph in ephemeris.c
+   make ephclk, ephpos extern in ephemeris.c, rtklib.h
+   make getbitg, getbits_38 extern in rtcm3.c, rtklib.h
+   make set38bits extern in rtcm3e.c, rtklib.h
+   fix warning at satpos_sbas in ephemeris.c
+   fix warning at decode_measepoch in septentrio.c
+   fix bug at rescode in pntpos.c
+   fix bug at sisa_index in rinex.c
+   fix bug at rtkpos in rtkpos.c
+   fix linefeed at outheader in postpos.c
+   fix WIN32 macro for 64 bit system in rtklib.h, rtkcmn.c, download.c, rtksvr.c, stream.c, streamsvr.c
+   fix bug if GLO and SBS not enabled at init_raw and init_rtcm in rcvraw.c and rtcm.c
+   fix possible \r\n in rtcm 1007, 1008, 1033 message (rtcm3.c)
+   remove getbitg in rcvraw.c
+   remove duplicate epoch at convrnx_s in convrnx.c
+   default GLONASS satellite frequency channel number (get_glo_fcn_default in rtklib.h, rtkcmn.c, sat2freq in rtkcmn.c, init_rtcm in rtcm.c)
+   default GPS DCB from 2W to 2X (rtcm3.c) used in save_msm_obs
+   output debug msg in rtcm decoder (rtcm3.c)
+
+   

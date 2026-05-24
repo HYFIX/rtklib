@@ -38,7 +38,7 @@
 #include <time.h>
 #include <ctype.h>
 #include <stdint.h>
-#ifdef WIN32
+#if defined(_WIN32) || defined(WIN32)
 #include <winsock2.h>
 #include <windows.h>
 #else
@@ -59,7 +59,7 @@ extern "C" {
 
 #define VER_RTKLIB  "2.4.3"             /* library version */
 
-#define PATCH_LEVEL "b34"               /* patch level */
+#define PATCH_LEVEL "b35"               /* patch level */
 
 #define COPYRIGHT_RTKLIB \
             "Copyright (C) 2007-2020 T.Takasu\nAll rights reserved."
@@ -98,6 +98,8 @@ extern "C" {
 #define FREQ1_CMP   1.561098E9          /* BDS B1I     frequency (Hz) */
 #define FREQ2_CMP   1.20714E9           /* BDS B2I/B2b frequency (Hz) */
 #define FREQ3_CMP   1.26852E9           /* BDS B3      frequency (Hz) */
+#define FREQX1      1.5933225E9         /* LEO XONA X-1 */
+#define FREQX5      1.19051625E9        /* LEO XONA X-5 */
 
 #define EFACT_GPS   1.0                 /* error factor: GPS */
 #define EFACT_GLO   1.5                 /* error factor: GLONASS */
@@ -125,6 +127,7 @@ extern "C" {
 #define TSYS_QZS    4                   /* time system: QZSS time */
 #define TSYS_CMP    5                   /* time system: BeiDou time */
 #define TSYS_IRN    6                   /* time system: IRNSS time */
+#define TSYS_LEO    7                   /* time system: LEO time */
 
 #ifndef NFREQ
 #define NFREQ       3                   /* number of carrier frequencies */
@@ -203,7 +206,7 @@ extern "C" {
 #endif
 #ifdef ENALEO
 #define MINPRNLEO   1                   /* min satellite sat number of LEO */
-#define MAXPRNLEO   10                  /* max satellite sat number of LEO */
+#define MAXPRNLEO   64                  /* max satellite sat number of LEO */
 #define NSATLEO     (MAXPRNLEO-MINPRNLEO+1) /* number of LEO satellites */
 #define NSYSLEO     1
 #else
@@ -510,7 +513,7 @@ extern "C" {
 #define P2_50       8.881784197001252E-16 /* 2^-50 */
 #define P2_55       2.775557561562891E-17 /* 2^-55 */
 
-#ifdef WIN32
+#if defined(_WIN32) || defined(WIN32)
 #define thread_t    HANDLE
 #define lock_t      CRITICAL_SECTION
 #define initlock(f) InitializeCriticalSection(f)
@@ -856,6 +859,7 @@ typedef struct {        /* solution type */
     float age;          /* age of differential (s) */
     float ratio;        /* AR ratio factor for valiation */
     float thres;        /* AR ratio threshold for valiation */
+    int   staid;        /* station id for solution (0:single) */
 } sol_t;
 
 typedef struct {        /* solution buffer type */
@@ -903,7 +907,7 @@ typedef struct {        /* RTCM control struct type */
     ssr_t ssr[MAXSAT];  /* output of ssr corrections */
     char msg[128];      /* special message */
     char msgtype[256];  /* last message type */
-    char msmtype[7][128]; /* msm signal types */
+    char msmtype[8][128]; /* msm signal types */
     int obsflag;        /* obs data complete flag (1:ok,0:not complete) */
     int ephsat;         /* input ephemeris satellite number */
     int ephset;         /* input ephemeris set (0-1) */
@@ -1014,6 +1018,7 @@ typedef struct {        /* processing options type */
     double odisp[2][6*11]; /* ocean tide loading parameters {rov,base} */
     int  freqopt;       /* disable L2-AR */
     char pppopt[256];   /* ppp option */
+    gtime_t tr;         /* approximate time for rtcm */
 } prcopt_t;
 
 typedef struct {        /* solution options type */
@@ -1062,7 +1067,7 @@ typedef struct {        /* RINEX options type */
     int navsys;         /* navigation system */
     int obstype;        /* observation type */
     int freqtype;       /* frequency type */
-    char mask[7][64];   /* code mask {GPS,GLO,GAL,QZS,SBS,CMP,IRN} */
+    char mask[8][64];   /* code mask {GPS,GLO,GAL,QZS,SBS,CMP,IRN,LEO} */
     char staid [32];    /* station id for rinex file name */
     char prog  [32];    /* program */
     char runby [32];    /* run-by */
@@ -1089,9 +1094,9 @@ typedef struct {        /* RINEX options type */
     gtime_t tstart;     /* first obs time */
     gtime_t tend;       /* last obs time */
     gtime_t trtcm;      /* approx log start time for rtcm */
-    char tobs[7][MAXOBSTYPE][4]; /* obs types {GPS,GLO,GAL,QZS,SBS,CMP,IRN} */
-    double shift[7][MAXOBSTYPE]; /* phase shift (cyc) {GPS,GLO,GAL,QZS,SBS,CMP,IRN} */
-    int nobs[7];        /* number of obs types {GPS,GLO,GAL,QZS,SBS,CMP,IRN} */
+    char tobs[8][MAXOBSTYPE][4]; /* obs types {GPS,GLO,GAL,QZS,SBS,CMP,IRN,LEO} */
+    double shift[8][MAXOBSTYPE]; /* phase shift (cyc) {GPS,GLO,GAL,QZS,SBS,CMP,IRN,LEO} */
+    int nobs[8];        /* number of obs types {GPS,GLO,GAL,QZS,SBS,CMP,IRN,LEO} */
 } rnxopt_t;
 
 typedef struct {        /* satellite status type */
@@ -1316,7 +1321,7 @@ EXPORT int  testsnr(int base, int freq, double el, double snr,
                     const snrmask_t *mask);
 EXPORT void setcodepri(int sys, int idx, const char *pri);
 EXPORT int  getcodepri(int sys, uint8_t code, const char *opt);
-
+EXPORT int  get_glo_fcn_default(int prn);
 /* matrix and vector functions -----------------------------------------------*/
 EXPORT double *mat  (int n, int m);
 EXPORT int    *imat (int n, int m);
@@ -1497,11 +1502,18 @@ EXPORT int  init_rnxctr (rnxctr_t *rnx);
 EXPORT void free_rnxctr (rnxctr_t *rnx);
 EXPORT int  open_rnxctr (rnxctr_t *rnx, FILE *fp);
 EXPORT int  input_rnxctr(rnxctr_t *rnx, FILE *fp);
-
+/* rtcm read functions */
+EXPORT int readrtcm(const char *file, int rcv, gtime_t ts, gtime_t te, gtime_t tr,
+                    double tint, const char *opt, obs_t *obs, nav_t *nav,
+                    sta_t *sta);
 /* ephemeris and clock functions ---------------------------------------------*/
 EXPORT double eph2clk (gtime_t time, const eph_t  *eph);
 EXPORT double geph2clk(gtime_t time, const geph_t *geph);
 EXPORT double seph2clk(gtime_t time, const seph_t *seph);
+EXPORT int ephclk(gtime_t time, gtime_t teph, int sat, const nav_t *nav,
+                  double *dts);
+EXPORT int ephpos(gtime_t time, gtime_t teph, int sat, const nav_t *nav,
+                  int iode, double *rs, double *dts, double *var, int *svh);
 EXPORT void eph2pos (gtime_t time, const eph_t  *eph,  double *rs, double *dts,
                      double *var);
 EXPORT void geph2pos(gtime_t time, const geph_t *geph, double *rs, double *dts,
@@ -1534,8 +1546,11 @@ EXPORT int tle_pos(gtime_t time, const char *name, const char *satno,
 /* receiver raw data functions -----------------------------------------------*/
 EXPORT uint32_t getbitu(const uint8_t *buff, int pos, int len);
 EXPORT int32_t  getbits(const uint8_t *buff, int pos, int len);
+EXPORT double getbitg(const uint8_t *buff, int pos, int len);
+EXPORT double getbits_38(const uint8_t *buff, int pos);
 EXPORT void setbitu(uint8_t *buff, int pos, int len, uint32_t data);
 EXPORT void setbits(uint8_t *buff, int pos, int len, int32_t  data);
+EXPORT void set38bits(uint8_t *buff, int pos, double value);
 EXPORT uint32_t rtk_crc32 (const uint8_t *buff, int len);
 EXPORT uint32_t rtk_crc24q(const uint8_t *buff, int len);
 EXPORT uint16_t rtk_crc16 (const uint8_t *buff, int len);

@@ -330,6 +330,7 @@ static void setmask(const char *argv, rnxopt_t *opt, int mask)
         else if (p[0]=='S') i=4;
         else if (p[0]=='C') i=5;
         else if (p[0]=='I') i=6;
+        else if (p[0]=='X') i=7;
         else continue;
         if ((code=obs2code(p+2))) {
             opt->mask[i][code-1]=mask?'1':'0';
@@ -387,7 +388,7 @@ static int cmdopts(int argc, char **argv, rnxopt_t *opt, char **ifile,
     
     opt->rnxver=304;
     opt->obstype=OBSTYPE_PR|OBSTYPE_CP;
-    opt->navsys=SYS_GPS|SYS_GLO|SYS_GAL|SYS_QZS|SYS_SBS|SYS_CMP|SYS_IRN;
+    opt->navsys=SYS_GPS|SYS_GLO|SYS_GAL|SYS_QZS|SYS_SBS|SYS_CMP|SYS_IRN|SYS_LEO;
     
     for (i=0;i<6;i++) for (j=0;j<64;j++) opt->mask[i][j]='1';
     
@@ -510,6 +511,7 @@ static int cmdopts(int argc, char **argv, rnxopt_t *opt, char **ifile,
             else if (!strcmp(sys,"S")) opt->navsys&=~SYS_SBS;
             else if (!strcmp(sys,"C")) opt->navsys&=~SYS_CMP;
             else if (!strcmp(sys,"I")) opt->navsys&=~SYS_IRN;
+            else if (!strcmp(sys,"X")) opt->navsys&=~SYS_LEO;
         }
         else if (!strcmp(argv[i],"-d" )&&i+1<argc) {
             *dir=argv[++i];

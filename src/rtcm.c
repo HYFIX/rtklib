@@ -68,7 +68,6 @@ extern int init_rtcm(rtcm_t *rtcm)
     gtime_t time0={0};
     obsd_t data0={{0}};
     eph_t  eph0 ={0,-1,-1};
-    geph_t geph0={0,-1};
     ssr_t ssr0={{{0}}};
     int i,j;
     
@@ -89,7 +88,7 @@ extern int init_rtcm(rtcm_t *rtcm)
         rtcm->ssr[i]=ssr0;
     }
     rtcm->msg[0]=rtcm->msgtype[0]=rtcm->opt[0]='\0';
-    for (i=0;i<6;i++) rtcm->msmtype[i][0]='\0';
+    for (i=0;i<8;i++) rtcm->msmtype[i][0]='\0';
     rtcm->obsflag=rtcm->ephsat=0;
     for (i=0;i<MAXSAT;i++) for (j=0;j<NFREQ+NEXOBS;j++) {
         rtcm->cp[i][j]=0.0;
@@ -108,7 +107,7 @@ extern int init_rtcm(rtcm_t *rtcm)
     /* reallocate memory for observation and ephemeris buffer */
     if (!(rtcm->obs.data=(obsd_t *)malloc(sizeof(obsd_t)*MAXOBS))||
         !(rtcm->nav.eph =(eph_t  *)malloc(sizeof(eph_t )*MAXSAT*2))||
-        !(rtcm->nav.geph=(geph_t *)malloc(sizeof(geph_t)*MAXPRNGLO))) {
+        !(MAXPRNGLO>0&&(rtcm->nav.geph=(geph_t *)malloc(sizeof(geph_t)*MAXPRNGLO)))) {
         free_rtcm(rtcm);
         return 0;
     }
@@ -117,7 +116,11 @@ extern int init_rtcm(rtcm_t *rtcm)
     rtcm->nav.ng=MAXPRNGLO;
     for (i=0;i<MAXOBS   ;i++) rtcm->obs.data[i]=data0;
     for (i=0;i<MAXSAT*2 ;i++) rtcm->nav.eph [i]=eph0;
-    for (i=0;i<MAXPRNGLO;i++) rtcm->nav.geph[i]=geph0;
+    for (i=0;i<MAXPRNGLO;i++) {
+        rtcm->nav.geph[i].frq=get_glo_fcn_default(i+1);
+        rtcm->nav.geph[i].sat=satno(SYS_GLO,i+1);
+        rtcm->nav.glo_fcn[i] =get_glo_fcn_default(i+1)+8;
+    }
     return 1;
 }
 /* free rtcm control ----------------------------------------------------------
@@ -130,9 +133,9 @@ extern void free_rtcm(rtcm_t *rtcm)
     trace(3,"free_rtcm:\n");
     
     /* free memory for observation and ephemeris buffer */
-    free(rtcm->obs.data); rtcm->obs.data=NULL; rtcm->obs.n=0;
-    free(rtcm->nav.eph ); rtcm->nav.eph =NULL; rtcm->nav.n=0;
-    free(rtcm->nav.geph); rtcm->nav.geph=NULL; rtcm->nav.ng=0;
+    if (rtcm->obs.data) { free(rtcm->obs.data); rtcm->obs.data=NULL; rtcm->obs.n =0; }
+    if (rtcm->nav.eph ) { free(rtcm->nav.eph ); rtcm->nav.eph =NULL; rtcm->nav.n =0; }
+    if (rtcm->nav.geph) { free(rtcm->nav.geph); rtcm->nav.geph=NULL; rtcm->nav.ng=0; }
 }
 /* input RTCM 2 message from stream --------------------------------------------
 * fetch next RTCM 2 message and input a message from byte stream
