@@ -7,7 +7,15 @@ CTARGET= -DENAGLO -DENAQZS -DENACMP -DENAGAL -DENAIRN -DNFREQ=7 -DNEXOBS=3 -DSVR
 #CTARGET= -DENAGLO -DENAQZS -DENACMP -DENAGAL -DENAIRN -DNFREQ=7 -DNEXOBS=3 -DIERS_MODEL -DSVR_REUSEADDR
 
 CFLAGS = -Wall -O3 -ansi -pedantic -Wno-unused-but-set-variable -I$(SRC) -I.. -DTRACE $(CTARGET) -g
-LDLIBS  = -lm -lrt -lpthread
+
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S), Linux)
+    LDLIBS = -lm -lrt -lpthread
+endif
+ifeq ($(UNAME_S), Darwin)
+    LDLIBS = -lm -lpthread
+endif
+
 #LDLIBS  = ../../../lib/iers/gcc/iers.a -lm -lrt -lpthread
 
 all        : rtkrcv

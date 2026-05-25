@@ -11,7 +11,13 @@ OPTIONS= -DTRACE -DENAGLO -DENAQZS -DENAGAL -DENACMP -DENAIRN -DENALEO -DNFREQ=7
 
 CFLAGS = -O3 -ansi -pedantic -Wall -Wno-unused-but-set-variable $(INCLUDE) $(OPTIONS) -g
 
-LDLIBS = -lm -lrt
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S), Linux)
+    LDLIBS = -lm -lrt
+endif
+ifeq ($(UNAME_S), Darwin)
+    LDLIBS = -lm
+endif
 
 all  : convbin
 
