@@ -2528,7 +2528,7 @@ extern int outrnxnavh(FILE *fp, const rnxopt_t *opt, const nav_t *nav)
     timestr_rnx(date);
     
     if (opt->rnxver<=299) { /* ver.2 */
-        fprintf(fp,"%9.2f           %-20s%-20s%-20s\n",opt->rnxver/100.0,
+        fprintf(fp,"%9.2f           %-20s%-20s%-20s\n",2.10,
                 "N: GPS NAV DATA","","RINEX VERSION / TYPE");
     }
     else { /* ver.3 */
@@ -2695,7 +2695,7 @@ extern int outrnxgnavh(FILE *fp, const rnxopt_t *opt, const nav_t *nav)
     timestr_rnx(date);
     
     if (opt->rnxver<=299) { /* ver.2 */
-        fprintf(fp,"%9.2f           %-20s%-20s%-20s\n",opt->rnxver/100.0,
+        fprintf(fp,"%9.2f           %-20s%-20s%-20s\n",2.10,
                 "GLONASS NAV DATA","","RINEX VERSION / TYPE");
     }
     else { /* ver.3 */
