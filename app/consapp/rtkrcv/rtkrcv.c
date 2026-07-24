@@ -160,12 +160,13 @@ static char sta_name[256]="";           /* station name */
 static prcopt_t prcopt;                 /* processing options */
 static solopt_t solopt[2]={{0}};        /* solution options */
 static filopt_t filopt  ={""};          /* file options */
+extern int partial_ar;
 
 /* help text -----------------------------------------------------------------*/
 static const char *usage[]={
     "usage: rtkrcv [-s][-p port][-d dev][-o file][-w pwd][-r level][-t level][-sta sta]",
     "              [-rover path][-base path][-eph path][-mode mode][-nf nf][-basepos basepos]",
-    "              [-sys system][-soltype type][-sol path][-rawlog][-screen]",
+    "              [-sys system][-soltype type][-sol path][-rawlog][-screen][-armode mode][-par]",
     "options",
     "  -s             start RTK server on program startup",
     "  -p port        port number for telnet console",
@@ -186,7 +187,10 @@ static const char *usage[]={
     "  -soltype type  solution format type (dms | deg | xyz | enu) [dms]",
     "  -sol path      solution output file path",
     "  -rawlog        enable custom raw stream logs",
-    "  -screen        output solution to screen (stdout)"
+    "  -screen        output solution to screen (stdout)",
+    "  -armode mode   AR mode (off | cont | inst | fixhold | wlnl | tcar)",
+    "  -par           enable partial ambiguity resolution (default)",
+    "  -nopar         disable partial ambiguity resolution"
 };
 static const char *helptxt[]={
     "start                 : start rtk server",
@@ -1673,6 +1677,8 @@ int main(int argc, char **argv)
     int nf_val = -1;
     int soltype_val = -1;
     int sys_val = -1;
+    int armode_val = -1;
+    int partialar_val = -1;
     int basepos_mode = -1; /* 0: rtcm, 1: xyz, 2: blh */
     double basepos_xyz[3]={0};
     double basepos_blh[3]={0};
@@ -1738,9 +1744,21 @@ int main(int argc, char **argv)
             }
             if (sys > 0) sys_val = sys;
         }
+        else if (!strcmp(argv[i],"-armode")&&i+1<argc) {
+            char *mode = argv[++i];
+            if      (!strcmp(mode,"off")||!strcmp(mode,"0")) armode_val=0;
+            else if (!strcmp(mode,"cont")||!strcmp(mode,"1")) armode_val=1;
+            else if (!strcmp(mode,"inst")||!strcmp(mode,"2")) armode_val=2;
+            else if (!strcmp(mode,"fixhold")||!strcmp(mode,"3")) armode_val=3;
+            else if (!strcmp(mode,"wlnl")||!strcmp(mode,"4")) armode_val=4;
+            else if (!strcmp(mode,"tcar")||!strcmp(mode,"5")||!strcmp(mode,"3step")) armode_val=5;
+            else printusage();
+        }
         else if (!strcmp(argv[i],"-rawlog")) rawlog=1;
         else if (!strcmp(argv[i],"-sol")&&i+1<argc) strcpy(sol_path,argv[++i]);
         else if (!strcmp(argv[i],"-screen")) outscreen=1;
+        else if (!strcmp(argv[i],"-par")||!strcmp(argv[i],"-partialar")) partialar_val=1;
+        else if (!strcmp(argv[i],"-nopar")||!strcmp(argv[i],"-nopartialar")) partialar_val=0;
         else printusage();
     }
     if (outscreen) start=1;
@@ -1787,6 +1805,14 @@ int main(int argc, char **argv)
 
     if (sys_val >= 0) {
         prcopt.navsys = sys_val;
+    }
+
+    if (armode_val >= 0) {
+        prcopt.modear = armode_val;
+    }
+
+    if (partialar_val >= 0) {
+        partial_ar = partialar_val;
     }
 
     if (*rover_path) {

@@ -94,6 +94,7 @@ static int statlevel=0;          /* rtk status output level (0:off) */
 static FILE *fp_stat=NULL;       /* rtk status file pointer */
 static char file_stat[1024]="";  /* rtk status file original path */
 static gtime_t time_stat={0};    /* rtk status file time */
+int partial_ar = 1;             /* partial ambiguity resolution flag */
 
 /* open solution status file ---------------------------------------------------
 * open solution status file and set output level
@@ -1343,6 +1344,539 @@ static void holdamb(rtk_t *rtk, const double *xa)
     }
     free(v); free(H);
 }
+/* solve integer ambiguity constraint update --------------------------------*/
+static int solve_lambda_constraint(int nx, int n_c, const double *H, double *x, double *P, double threshold)
+{
+    double *y;
+    double *Qc;
+    double *b;
+    double *dy;
+    double *PH_T;
+    double *K;
+    double *dx;
+    double *HP;
+    double *KHP;
+    double s[2];
+    int i,info,stat=0;
+    
+    if (n_c<2) return 0;
+    
+    y=mat(n_c,1);
+    Qc=mat(n_c,n_c);
+    b=mat(n_c,2);
+    dy=mat(n_c,1);
+    PH_T=mat(nx,n_c);
+    K=mat(nx,n_c);
+    dx=mat(nx,1);
+    HP=mat(n_c,nx);
+    KHP=mat(nx,nx);
+    
+    /* y = H * x */
+    matmul("NN",n_c,1,nx,1.0,H,x,0.0,y);
+    
+    /* PH_T = P * H^T */
+    matmul("NT",nx,n_c,nx,1.0,P,H,0.0,PH_T);
+    
+    /* Qc = H * PH_T */
+    matmul("NN",n_c,n_c,nx,1.0,H,PH_T,0.0,Qc);
+    
+    /* regularize Qc to ensure positive-definiteness and prevent LD factorization error */
+    for (i=0;i<n_c;i++) {
+        Qc[i+i*n_c]+=1e-9;
+    }
+    
+    /* solve LAMBDA */
+    if (!(info=lambda(n_c,2,y,Qc,b,s))) {
+        if (s[0]<=0.0||s[1]/s[0]>=threshold) {
+            /* dy = y - b */
+            for (i=0;i<n_c;i++) {
+                dy[i]=y[i]-b[i];
+            }
+            /* invert Qc */
+            if (!matinv(Qc,n_c)) {
+                /* K = PH_T * Qc^-1 */
+                matmul("NN",nx,n_c,n_c,1.0,PH_T,Qc,0.0,K);
+                /* dx = K * dy */
+                matmul("NN",nx,1,n_c,1.0,K,dy,0.0,dx);
+                /* update state: x = x - dx */
+                for (i=0;i<nx;i++) {
+                    x[i]-=dx[i];
+                }
+                /* HP = H * P */
+                matmul("NN",n_c,nx,nx,1.0,H,P,0.0,HP);
+                /* KHP = K * HP */
+                matmul("NN",nx,nx,n_c,1.0,K,HP,0.0,KHP);
+                /* update covariance: P = P - KHP */
+                for (i=0;i<nx*nx;i++) {
+                    P[i]-=KHP[i];
+                }
+                stat=1;
+            }
+        }
+    }
+    
+    free(y); free(Qc); free(b); free(dy); free(PH_T); free(K); free(dx); free(HP); free(KHP);
+    return stat;
+}
+
+/* solve integer ambiguity constraint update for NL (Narrow Lane) -----------*/
+static int solve_lambda_constraint_NL(rtk_t *rtk, int nx, int n_c, const double *H, double *x, double *P, double threshold, double *bias, double *s)
+{
+    prcopt_t *opt=&rtk->opt;
+    double *y;
+    double *Qc;
+    double *b;
+    double *dy;
+    double *PH_T;
+    double *K;
+    double *dx;
+    double *HP;
+    double *KHP;
+    int i,j,info,stat=0;
+    extern int partial_ar;
+    int nf=NF(opt);
+    
+    if (n_c<2) return 0;
+    
+    y=mat(n_c,1);
+    Qc=mat(n_c,n_c);
+    b=mat(n_c,2);
+    dy=mat(n_c,1);
+    PH_T=mat(nx,n_c);
+    K=mat(nx,n_c);
+    dx=mat(nx,1);
+    HP=mat(n_c,nx);
+    KHP=mat(nx,nx);
+    
+    /* y = H * x */
+    matmul("NN",n_c,1,nx,1.0,H,x,0.0,y);
+    
+    /* PH_T = P * H^T */
+    matmul("NT",nx,n_c,nx,1.0,P,H,0.0,PH_T);
+    
+    /* Qc = H * PH_T */
+    matmul("NN",n_c,n_c,nx,1.0,H,PH_T,0.0,Qc);
+    
+    /* regularize Qc to ensure positive-definiteness and prevent LD factorization error */
+    for (i=0;i<n_c;i++) {
+        Qc[i+i*n_c]+=1e-9;
+    }
+    
+    /* solve LAMBDA */
+    if (!(info=lambda(n_c,2,y,Qc,b,s))) {
+        if (s[0]<=0.0||s[1]/s[0]>=threshold) {
+            /* dy = y - b */
+            for (i=0;i<n_c;i++) {
+                bias[i]=b[i];
+                dy[i]=y[i]-b[i];
+            }
+            /* invert Qc */
+            if (!matinv(Qc,n_c)) {
+                /* K = PH_T * Qc^-1 */
+                matmul("NN",nx,n_c,n_c,1.0,PH_T,Qc,0.0,K);
+                /* dx = K * dy */
+                matmul("NN",nx,1,n_c,1.0,K,dy,0.0,dx);
+                /* update state: x = x - dx */
+                for (i=0;i<nx;i++) {
+                    x[i]-=dx[i];
+                }
+                /* HP = H * P */
+                matmul("NN",n_c,nx,nx,1.0,H,P,0.0,HP);
+                /* KHP = K * HP */
+                matmul("NN",nx,nx,n_c,1.0,K,HP,0.0,KHP);
+                /* update covariance: P = P - KHP */
+                for (i=0;i<nx*nx;i++) {
+                    P[i]-=KHP[i];
+                }
+                stat=1;
+            }
+        }
+        else if (partial_ar) {
+            int k, r, c, info_sub, stat_sub=0;
+            int *sort_idx = imat(n_c, 1);
+            double *el = mat(n_c, 1);
+            int nr_opt = NR(opt);
+            
+            trace(3, "solve_lambda_constraint_NL: validation failed (ratio=%.2f), trying Partial AR...\n", s[1]/s[0]);
+            
+            for (i=0;i<n_c;i++) {
+                int sat = -1;
+                for (j=0;j<nx;j++) {
+                    if (H[j + i*nx] < -0.5) {
+                        sat = j - nr_opt + 1;
+                        break;
+                    }
+                }
+                el[i] = (sat > 0 && sat <= MAXSAT) ? rtk->ssat[sat-1].azel[1] : 0.0;
+                sort_idx[i] = i;
+            }
+            
+            for (r=0;r<n_c-1;r++) {
+                for (c=r+1;c<n_c;c++) {
+                    if (el[sort_idx[r]] < el[sort_idx[c]]) {
+                        int tmp = sort_idx[r];
+                        sort_idx[r] = sort_idx[c];
+                        sort_idx[c] = tmp;
+                    }
+                }
+            }
+            
+            int min_k = opt->minfix > 4 ? opt->minfix : 4;
+            if (min_k > n_c - 1) min_k = n_c - 1;
+            
+            for (k=n_c-1; k>=min_k; k--) {
+                double *H_sub = zeros(k, nx);
+                double *y_sub = mat(k, 1);
+                double *Q_sub = mat(k, k);
+                double *b_sub = mat(k, 2);
+                double s_sub[2];
+                double *dy_sub = mat(k, 1);
+                double *PH_T_sub = mat(nx, k);
+                double *K_sub = mat(nx, k);
+                double *dx_sub = mat(nx, 1);
+                double *HP_sub = mat(k, nx);
+                double *KHP_sub = mat(nx, nx);
+                int *sub_idx = imat(k, 1);
+                
+                /* Copy first k elements of sort_idx and sort them ascending to preserve original order */
+                for (r=0; r<k; r++) sub_idx[r] = sort_idx[r];
+                for (r=0; r<k-1; r++) {
+                    for (c=r+1; c<k; c++) {
+                        if (sub_idx[r] > sub_idx[c]) {
+                            int tmp = sub_idx[r];
+                            sub_idx[r] = sub_idx[c];
+                            sub_idx[c] = tmp;
+                        }
+                    }
+                }
+                
+                for (r=0; r<k; r++) {
+                    memcpy(H_sub + r*nx, H + sub_idx[r]*nx, sizeof(double)*nx);
+                }
+                
+                matmul("NN", k, 1, nx, 1.0, H_sub, x, 0.0, y_sub);
+                matmul("NT", nx, k, nx, 1.0, P, H_sub, 0.0, PH_T_sub);
+                matmul("NN", k, k, nx, 1.0, H_sub, PH_T_sub, 0.0, Q_sub);
+                
+                for (r=0; r<k; r++) Q_sub[r+r*k] += 1e-9;
+                
+                if (!(info_sub = lambda(k, 2, y_sub, Q_sub, b_sub, s_sub))) {
+                    if (s_sub[0]<=0.0||s_sub[1]/s_sub[0]>=threshold) {
+                        trace(3, "Partial AR: validation ok for subset size %d (ratio=%.2f)\n", k, s_sub[1]/s_sub[0]);
+                        
+                        for (r=0; r<k; r++) {
+                            bias[r] = b_sub[r];
+                            dy_sub[r] = y_sub[r] - b_sub[r];
+                        }
+                        
+                        if (!matinv(Q_sub, k)) {
+                            matmul("NN", nx, k, k, 1.0, PH_T_sub, Q_sub, 0.0, K_sub);
+                            matmul("NN", nx, 1, k, 1.0, K_sub, dy_sub, 0.0, dx_sub);
+                            for (r=0; r<nx; r++) x[r] -= dx_sub[r];
+                            
+                            matmul("NN", k, nx, nx, 1.0, H_sub, P, 0.0, HP_sub);
+                            matmul("NN", nx, nx, k, 1.0, K_sub, HP_sub, 0.0, KHP_sub);
+                            for (r=0; r<nx*nx; r++) P[r] -= KHP_sub[r];
+                            
+                            /* Update SSAT fix flags: set all to 1 (float) first */
+                            for (r=0; r<MAXSAT; r++) for (c=0; c<nf; c++) {
+                                rtk->ssat[r].fix[c] = 1;
+                            }
+                            /* Mark resolved subset elements as fixed */
+                            for (r=0; r<k; r++) {
+                                int ref_sat = -1, tar_sat = -1;
+                                for (c=0; c<nx; c++) {
+                                    if (H_sub[c + r*nx] > 0.5) ref_sat = c - nr_opt + 1;
+                                    if (H_sub[c + r*nx] < -0.5) tar_sat = c - nr_opt + 1;
+                                }
+                                if (ref_sat > 0 && ref_sat <= MAXSAT) rtk->ssat[ref_sat-1].fix[0] = 2;
+                                if (tar_sat > 0 && tar_sat <= MAXSAT) rtk->ssat[tar_sat-1].fix[0] = 2;
+                            }
+                            
+                            s[0] = s_sub[0];
+                            s[1] = s_sub[1];
+                            stat_sub = k;
+                        }
+                    }
+                }
+                
+                free(H_sub); free(y_sub); free(Q_sub); free(b_sub); free(dy_sub);
+                free(PH_T_sub); free(K_sub); free(dx_sub); free(HP_sub); free(KHP_sub);
+                free(sub_idx);
+                
+                if (stat_sub > 0) break;
+            }
+            
+            free(sort_idx); free(el);
+            if (stat_sub > 0) return stat_sub;
+        }
+    }
+    
+    free(y); free(Qc); free(b); free(dy); free(PH_T); free(K); free(dx); free(HP); free(KHP);
+    return stat;
+}
+
+/* resolve integer ambiguity by multi-step (EWL -> WL -> NL) -----------------*/
+static int resamb_multistep(rtk_t *rtk, double *bias, double *xa)
+{
+    prcopt_t *opt=&rtk->opt;
+    int i,j,m,nf=NF(opt);
+    int nx=rtk->nx,na=rtk->na;
+    double *x_temp, *P_temp;
+    int nb_idx;
+    int *ix_dd;
+    int ref_sat;
+    int n_c=0;
+    
+#define VALID_AMB(s,f) (rtk->x[IB(s,f,opt)]!=0.0)
+
+    trace(3,"resamb_multistep: nx=%d modear=%d\n",nx,opt->modear);
+    
+    /* We still call ddidx to identify which ambiguities are eligible for fixing */
+    ix_dd=imat(nx,2);
+    if ((nb_idx=ddidx(rtk,ix_dd))<=0) {
+        free(ix_dd);
+        return 0;
+    }
+    free(ix_dd);
+    
+    /* Allocate temporary state vector and covariance */
+    x_temp=mat(nx,1);
+    P_temp=mat(nx,nx);
+    memcpy(x_temp,rtk->x,sizeof(double)*nx);
+    memcpy(P_temp,rtk->P,sizeof(double)*nx*nx);
+    
+    /* ---------------------------------------------------- */
+    /* Step 1: EWL (Extra-Wide Lane) AR (only if TCAR and nf>=3) */
+    /* ---------------------------------------------------- */
+    if (opt->modear==ARMODE_TCAR&&nf>=3) {
+        n_c=0;
+        /* Count EWL combinations */
+        for (m=0;m<6;m++) {
+            ref_sat=-1;
+            for (i=0;i<MAXSAT;i++) {
+                if (test_sys(rtk->ssat[i].sys,m)&&rtk->ssat[i].fix[0]==2) {
+                    if (VALID_AMB(i+1,0)) {
+                        ref_sat=i+1;
+                        break;
+                    }
+                }
+            }
+            if (ref_sat<0) continue;
+            
+            for (i=0;i<MAXSAT;i++) {
+                if (i+1==ref_sat) continue;
+                if (test_sys(rtk->ssat[i].sys,m)&&rtk->ssat[i].fix[0]==2) {
+                    if (rtk->ssat[i].fix[1]==2&&rtk->ssat[i].fix[2]==2&&
+                        rtk->ssat[ref_sat-1].fix[1]==2&&rtk->ssat[ref_sat-1].fix[2]==2) {
+                        if (VALID_AMB(i+1,1)&&VALID_AMB(i+1,2)&&
+                            VALID_AMB(ref_sat,1)&&VALID_AMB(ref_sat,2)) {
+                            n_c++;
+                        }
+                    }
+                }
+            }
+        }
+        
+        if (n_c>0) {
+            double *H=zeros(n_c,nx);
+            int idx=0;
+            for (m=0;m<6;m++) {
+                ref_sat=-1;
+                for (i=0;i<MAXSAT;i++) {
+                    if (test_sys(rtk->ssat[i].sys,m)&&rtk->ssat[i].fix[0]==2) {
+                        if (VALID_AMB(i+1,0)) {
+                            ref_sat=i+1;
+                            break;
+                        }
+                    }
+                }
+                if (ref_sat<0) continue;
+                
+                for (i=0;i<MAXSAT;i++) {
+                    if (i+1==ref_sat) continue;
+                    if (test_sys(rtk->ssat[i].sys,m)&&rtk->ssat[i].fix[0]==2) {
+                        if (rtk->ssat[i].fix[1]==2&&rtk->ssat[i].fix[2]==2&&
+                            rtk->ssat[ref_sat-1].fix[1]==2&&rtk->ssat[ref_sat-1].fix[2]==2) {
+                            if (VALID_AMB(i+1,1)&&VALID_AMB(i+1,2)&&
+                                VALID_AMB(ref_sat,1)&&VALID_AMB(ref_sat,2)) {
+                                H[IB(ref_sat,1,opt)+idx*nx]= 1.0;
+                                H[IB(ref_sat,2,opt)+idx*nx]=-1.0;
+                                H[IB(i+1,1,opt)    +idx*nx]=-1.0;
+                                H[IB(i+1,2,opt)    +idx*nx]= 1.0;
+                                idx++;
+                            }
+                        }
+                    }
+                }
+            }
+            
+            if (!solve_lambda_constraint(nx,n_c,H,x_temp,P_temp,opt->thresar[0])) {
+                trace(2,"resamb_multistep: EWL AR validation failed\n");
+                free(H); free(x_temp); free(P_temp);
+                return 0;
+            }
+            free(H);
+        }
+    }
+    
+    /* ---------------------------------------------------- */
+    /* Step 2: WL (Wide Lane) AR (if TCAR or WLNL and nf>=2) */
+    /* ---------------------------------------------------- */
+    if ((opt->modear==ARMODE_TCAR||opt->modear==ARMODE_WLNL)&&nf>=2) {
+        n_c=0;
+        /* Count WL combinations */
+        for (m=0;m<6;m++) {
+            ref_sat=-1;
+            for (i=0;i<MAXSAT;i++) {
+                if (test_sys(rtk->ssat[i].sys,m)&&rtk->ssat[i].fix[0]==2) {
+                    if (VALID_AMB(i+1,0)) {
+                        ref_sat=i+1;
+                        break;
+                    }
+                }
+            }
+            if (ref_sat<0) continue;
+            
+            for (i=0;i<MAXSAT;i++) {
+                if (i+1==ref_sat) continue;
+                if (test_sys(rtk->ssat[i].sys,m)&&rtk->ssat[i].fix[0]==2) {
+                    if (rtk->ssat[i].fix[1]==2&&rtk->ssat[ref_sat-1].fix[1]==2) {
+                        if (VALID_AMB(i+1,0)&&VALID_AMB(i+1,1)&&
+                            VALID_AMB(ref_sat,0)&&VALID_AMB(ref_sat,1)) {
+                            n_c++;
+                        }
+                    }
+                }
+            }
+        }
+        
+        if (n_c>0) {
+            double *H=zeros(n_c,nx);
+            int idx=0;
+            for (m=0;m<6;m++) {
+                ref_sat=-1;
+                for (i=0;i<MAXSAT;i++) {
+                    if (test_sys(rtk->ssat[i].sys,m)&&rtk->ssat[i].fix[0]==2) {
+                        if (VALID_AMB(i+1,0)) {
+                            ref_sat=i+1;
+                            break;
+                        }
+                    }
+                }
+                if (ref_sat<0) continue;
+                
+                for (i=0;i<MAXSAT;i++) {
+                    if (i+1==ref_sat) continue;
+                    if (test_sys(rtk->ssat[i].sys,m)&&rtk->ssat[i].fix[0]==2) {
+                        if (rtk->ssat[i].fix[1]==2&&rtk->ssat[ref_sat-1].fix[1]==2) {
+                            if (VALID_AMB(i+1,0)&&VALID_AMB(i+1,1)&&
+                                VALID_AMB(ref_sat,0)&&VALID_AMB(ref_sat,1)) {
+                                H[IB(ref_sat,0,opt)+idx*nx]= 1.0;
+                                H[IB(ref_sat,1,opt)+idx*nx]=-1.0;
+                                H[IB(i+1,0,opt)    +idx*nx]=-1.0;
+                                H[IB(i+1,1,opt)    +idx*nx]= 1.0;
+                                idx++;
+                            }
+                        }
+                    }
+                }
+            }
+            
+            if (!solve_lambda_constraint(nx,n_c,H,x_temp,P_temp,opt->thresar[0])) {
+                trace(2,"resamb_multistep: WL AR validation failed\n");
+                free(H); free(x_temp); free(P_temp);
+                return 0;
+            }
+            free(H);
+        }
+    }
+    
+    /* ---------------------------------------------------- */
+    /* Step 3: NL (Narrow Lane) AR */
+    /* ---------------------------------------------------- */
+    {
+        double s[2];
+        n_c=0;
+        /* Count NL combinations */
+        for (m=0;m<6;m++) {
+            ref_sat=-1;
+            for (i=0;i<MAXSAT;i++) {
+                if (test_sys(rtk->ssat[i].sys,m)&&rtk->ssat[i].fix[0]==2) {
+                    if (VALID_AMB(i+1,0)) {
+                        ref_sat=i+1;
+                        break;
+                    }
+                }
+            }
+            if (ref_sat<0) continue;
+            
+            for (i=0;i<MAXSAT;i++) {
+                if (i+1==ref_sat) continue;
+                if (test_sys(rtk->ssat[i].sys,m)&&rtk->ssat[i].fix[0]==2) {
+                    if (VALID_AMB(i+1,0)&&VALID_AMB(ref_sat,0)) {
+                        n_c++;
+                    }
+                }
+            }
+        }
+        
+        if (n_c>0) {
+            double *H=zeros(n_c,nx);
+            int idx=0;
+            for (m=0;m<6;m++) {
+                ref_sat=-1;
+                for (i=0;i<MAXSAT;i++) {
+                    if (test_sys(rtk->ssat[i].sys,m)&&rtk->ssat[i].fix[0]==2) {
+                        if (VALID_AMB(i+1,0)) {
+                            ref_sat=i+1;
+                            break;
+                        }
+                    }
+                }
+                if (ref_sat<0) continue;
+                
+                for (i=0;i<MAXSAT;i++) {
+                    if (i+1==ref_sat) continue;
+                    if (test_sys(rtk->ssat[i].sys,m)&&rtk->ssat[i].fix[0]==2) {
+                        if (VALID_AMB(i+1,0)&&VALID_AMB(ref_sat,0)) {
+                            H[IB(ref_sat,0,opt)+idx*nx]= 1.0;
+                            H[IB(i+1,0,opt)    +idx*nx]=-1.0;
+                            idx++;
+                        }
+                    }
+                }
+            }
+            
+            if (!solve_lambda_constraint_NL(rtk,nx,n_c,H,x_temp,P_temp,opt->thresar[0],bias,s)) {
+                trace(2,"resamb_multistep: NL AR validation failed\n");
+                free(H); free(x_temp); free(P_temp);
+                return 0;
+            }
+            free(H);
+            
+            rtk->sol.ratio=s[0]>0?(float)(s[1]/s[0]):0.0f;
+            if (rtk->sol.ratio>999.9) rtk->sol.ratio=999.9f;
+        }
+        else {
+            free(x_temp); free(P_temp);
+            return 0;
+        }
+    }
+    
+    /* Copy fixed parameters to rtk->xa and rtk->Pa */
+    for (i=0;i<na;i++) {
+        rtk->xa[i]=x_temp[i];
+        for (j=0;j<na;j++) rtk->Pa[i+j*na]=P_temp[i+j*nx];
+    }
+    
+    /* Copy full fixed state to xa */
+    memcpy(xa,x_temp,sizeof(double)*nx);
+    
+    free(x_temp); free(P_temp);
+    return n_c;
+}
+
 /* resolve integer ambiguity by LAMBDA ---------------------------------------*/
 static int resamb_LAMBDA(rtk_t *rtk, double *bias, double *xa)
 {
@@ -1352,6 +1886,10 @@ static int resamb_LAMBDA(rtk_t *rtk, double *bias, double *xa)
     int *ix;
 
     trace(3,"resamb_LAMBDA : nx=%d\n",nx);
+    
+    if (rtk->opt.modear==ARMODE_WLNL||rtk->opt.modear==ARMODE_TCAR) {
+        return resamb_multistep(rtk,bias,xa);
+    }
     
     rtk->sol.ratio=0.0;
     
@@ -1419,9 +1957,137 @@ static int resamb_LAMBDA(rtk_t *rtk, double *bias, double *xa)
             else nb=0;
         }
         else { /* validation failed */
-            errmsg(rtk,"ambiguity validation failed (nb=%d ratio=%.2f s=%.2f/%.2f)\n",
-                   nb,s[1]/s[0],s[0],s[1]);
-            nb=0;
+            extern int partial_ar;
+            int nf=NF(opt);
+            if (partial_ar) {
+                int k, r, c, info_sub, stat_sub=0;
+                int *sort_idx = imat(nb, 1);
+                double *el = mat(nb, 1);
+                
+                trace(3, "resamb_LAMBDA: validation failed (ratio=%.2f), trying Partial AR...\n", s[1]/s[0]);
+                
+                for (i=0;i<nb;i++) {
+                    int sat = (ix[i*2+1] - na) % MAXSAT + 1;
+                    el[i] = (sat > 0 && sat <= MAXSAT) ? rtk->ssat[sat-1].azel[1] : 0.0;
+                    sort_idx[i] = i;
+                }
+                
+                for (r=0;r<nb-1;r++) {
+                    for (c=r+1;c<nb;c++) {
+                        if (el[sort_idx[r]] < el[sort_idx[c]]) {
+                            int tmp = sort_idx[r];
+                            sort_idx[r] = sort_idx[c];
+                            sort_idx[c] = tmp;
+                        }
+                    }
+                }
+                
+                int min_k = opt->minfix > 4 ? opt->minfix : 4;
+                if (min_k > nb - 1) min_k = nb - 1;
+                
+                for (k=nb-1; k>=min_k; k--) {
+                    double *y_sub = mat(k, 1);
+                    double *Q_sub = mat(k, k);
+                    double *b_sub = mat(k, 2);
+                    double s_sub[2];
+                    int *sub_idx = imat(k, 1);
+                    
+                    /* Copy first k elements of sort_idx and sort them ascending to preserve original order */
+                    for (r=0; r<k; r++) sub_idx[r] = sort_idx[r];
+                    for (r=0; r<k-1; r++) {
+                        for (c=r+1; c<k; c++) {
+                            if (sub_idx[r] > sub_idx[c]) {
+                                int tmp = sub_idx[r];
+                                sub_idx[r] = sub_idx[c];
+                                sub_idx[c] = tmp;
+                            }
+                        }
+                    }
+                    
+                    for (r=0; r<k; r++) {
+                        y_sub[r] = y[sub_idx[r]];
+                        for (c=0; c<k; c++) {
+                            Q_sub[r + c * k] = Qb[sub_idx[r] + sub_idx[c] * nb];
+                        }
+                    }
+                    
+                    for (r=0; r<k; r++) Q_sub[r+r*k] += 1e-9;
+                    
+                    if (!(info_sub = lambda(k, 2, y_sub, Q_sub, b_sub, s_sub))) {
+                        if (s_sub[0]<=0.0||s_sub[1]/s_sub[0]>=opt->thresar[0]) {
+                            trace(3, "Partial AR: validation ok for subset size %d (ratio=%.2f)\n", k, s_sub[1]/s_sub[0]);
+                            
+                            double *Qab_sub = mat(na, k);
+                            double *db_sub = mat(k, 1);
+                            double *QQ_sub = mat(na, k);
+                            
+                            for (r=0; r<na; r++) {
+                                for (c=0; c<k; c++) {
+                                    Qab_sub[r + c * na] = Qab[r + sub_idx[c] * na];
+                                }
+                            }
+                            
+                            for (r=0; r<na; r++) {
+                                rtk->xa[r] = rtk->x[r];
+                                for (c=0; c<na; c++) rtk->Pa[r + c * na] = rtk->P[r + c * nx];
+                            }
+                            
+                            for (r=0; r<k; r++) {
+                                bias[r] = b_sub[r];
+                                y_sub[r] -= b_sub[r];
+                            }
+                            
+                            if (!matinv(Q_sub, k)) {
+                                matmul("NN", k, 1, k, 1.0, Q_sub, y_sub, 0.0, db_sub);
+                                matmul("NN", na, 1, k,-1.0, Qab_sub, db_sub, 1.0, rtk->xa);
+                                
+                                matmul("NN", na, k, k, 1.0, Qab_sub, Q_sub, 0.0, QQ_sub);
+                                matmul("NT", na, na, k,-1.0, QQ_sub, Qab_sub, 1.0, rtk->Pa);
+                                
+                                /* Update SSAT fix flags: set all to 1 (float) first */
+                                for (r=0; r<MAXSAT; r++) for (c=0; c<nf; c++) {
+                                    rtk->ssat[r].fix[c] = 1;
+                                }
+                                /* Mark resolved subset elements as fixed */
+                                for (r=0; r<k; r++) {
+                                    int ref_sat = (ix[sub_idx[r]*2] - na) % MAXSAT + 1;
+                                    int tar_sat = (ix[sub_idx[r]*2+1] - na) % MAXSAT + 1;
+                                    int f = (ix[sub_idx[r]*2+1] - na) / MAXSAT;
+                                    rtk->ssat[ref_sat-1].fix[f] = 2;
+                                    rtk->ssat[tar_sat-1].fix[f] = 2;
+                                }
+                                
+                                restamb(rtk, bias, k, xa);
+                                
+                                rtk->sol.ratio = s_sub[0]>0 ? (float)(s_sub[1]/s_sub[0]) : 0.0f;
+                                if (rtk->sol.ratio>999.9) rtk->sol.ratio = 999.9f;
+                                
+                                stat_sub = k;
+                            }
+                            
+                            free(Qab_sub); free(db_sub); free(QQ_sub);
+                        }
+                    }
+                    
+                    free(y_sub); free(Q_sub); free(b_sub);
+                    free(sub_idx);
+                    
+                    if (stat_sub > 0) break;
+                }
+                
+                free(sort_idx); free(el);
+                if (stat_sub > 0) {
+                    nb = stat_sub;
+                } else {
+                    errmsg(rtk,"ambiguity validation failed (nb=%d ratio=%.2f s=%.2f/%.2f)\n",
+                           nb,s[1]/s[0],s[0],s[1]);
+                    nb=0;
+                }
+            } else {
+                errmsg(rtk,"ambiguity validation failed (nb=%d ratio=%.2f s=%.2f/%.2f)\n",
+                       nb,s[1]/s[0],s[0],s[1]);
+                nb=0;
+            }
         }
     }
     else {
