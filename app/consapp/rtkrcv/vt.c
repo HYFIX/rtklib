@@ -91,7 +91,7 @@ static int vt_read(vt_t *vt, char *buf, int len)
 extern vt_t *vt_open(int sock, const char *dev)
 {
     const char mode[]={C_IAC,C_WILL,C_SUPPGA,C_IAC,C_WILL,C_ECHO};
-#ifndef WIN32
+#if !defined(_WIN32) && !defined(WIN32)
     struct termios tio={0};
 #endif
     vt_t *vt;
@@ -107,7 +107,7 @@ extern vt_t *vt_open(int sock, const char *dev)
     for (i=0;i<MAXHIST;i++) {
         vt->hist[i]=NULL;
     }
-#ifdef WIN32
+#if defined(_WIN32) || defined(WIN32)
     if (!sock) {
         HANDLE h;
         DWORD m;
@@ -154,7 +154,7 @@ extern void vt_close(vt_t *vt)
     
     trace(3,"vt_close:\n");
     
-#ifndef WIN32
+#if !defined(_WIN32) && !defined(WIN32)
     /* restore terminal mode */
     if (!vt->type) {
         tcsetattr(vt->in,TCSANOW,&vt->tio);
@@ -164,7 +164,7 @@ extern void vt_close(vt_t *vt)
         closesock(vt->in);
     }
     else {
-#ifndef WIN32
+#if !defined(_WIN32) && !defined(WIN32)
         close(vt->in);
 #endif
     }
@@ -404,7 +404,11 @@ extern int vt_gets(vt_t *vt, char *buff, int n)
 /* put character to console --------------------------------------------------*/
 static int vt_putchar(vt_t *vt, char c)
 {
-    if (!vt||!vt->state) return 0;
+    if (!vt) {
+        putchar(c);
+        return 1;
+    }
+    if (!vt->state) return 0;
     if (vt->logfp) fwrite(&c,1,1,vt->logfp);
     return vt_write(vt,&c,1)==1;
 }
@@ -416,6 +420,11 @@ static int vt_putchar(vt_t *vt, char c)
 *-----------------------------------------------------------------------------*/
 extern int vt_putc(vt_t *vt, char c)
 {
+    if (!vt) {
+        putchar(c);
+        if (c=='\n') fflush(stdout);
+        return 1;
+    }
     if (c=='\n'&&!vt_putchar(vt,'\r')) return 0;
     return vt_putchar(vt,c);
 }

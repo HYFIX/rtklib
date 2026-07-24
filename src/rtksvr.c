@@ -44,8 +44,58 @@
 *                            use integer types in stdint.h
 *-----------------------------------------------------------------------------*/
 #include "rtklib.h"
+#include <time.h>
 
 #define MIN_INT_RESET   30000   /* mininum interval of reset command (ms) */
+
+/* custom raw data logging definitions */
+int rawlog = 0;
+static FILE *fp_rawlog[3] = {NULL, NULL, NULL};
+
+static void get_mountpoint(const char *path, char *mountpoint)
+{
+    const char *p = strrchr(path, '/');
+    if (p) {
+        strcpy(mountpoint, p + 1);
+    } else {
+        strcpy(mountpoint, "unknown");
+    }
+}
+
+static void open_rawlogs(rtksvr_t *svr)
+{
+    time_t rawtime;
+    struct tm *timeinfo;
+    char time_str[64];
+    char filename[512];
+    char mnt[128];
+    int i;
+    
+    if (!rawlog) return;
+    
+    time(&rawtime);
+    timeinfo = localtime(&rawtime);
+    strftime(time_str, sizeof(time_str), "%Y-%m-%d-%H-%M-%S", timeinfo);
+    
+    for (i=0;i<3;i++) {
+        if (svr->stream[i].state>0) {
+            get_mountpoint(svr->stream[i].path, mnt);
+            sprintf(filename, "%s-%s.log", time_str, mnt);
+            fp_rawlog[i] = fopen(filename, "w");
+        }
+    }
+}
+
+static void close_rawlogs(void)
+{
+    int i;
+    for (i=0;i<3;i++) {
+        if (fp_rawlog[i]) {
+            fclose(fp_rawlog[i]);
+            fp_rawlog[i] = NULL;
+        }
+    }
+}
 
 /* write solution header to output stream ------------------------------------*/
 static void writesolhead(stream_t *stream, const solopt_t *solopt)
@@ -590,6 +640,15 @@ static void *rtksvrthread(void *arg)
             if ((n=strread(svr->stream+i,p,q-p))<=0) {
                 continue;
             }
+            /* log raw data buffer */
+            if (rawlog && fp_rawlog[i]) {
+                gtime_t t_now = timeget();
+                long long utc_ms = (long long)t_now.time * 1000 + (long long)(t_now.sec * 1000);
+                fprintf(fp_rawlog[i], "$GEOD,%lld,%d,", utc_ms, n);
+                fwrite(p, 1, n, fp_rawlog[i]);
+                fprintf(fp_rawlog[i], "\r\n");
+                fflush(fp_rawlog[i]);
+            }
             /* write receiver raw/rtcm data to log stream */
             strwrite(svr->stream+i+5,p,n);
             svr->nb[i]+=n;
@@ -952,6 +1011,7 @@ extern int rtksvrstart(rtksvr_t *svr, int cycle, int buffsize, int *strs,
         sprintf(errmsg,"thread create error\n");
         return 0;
     }
+    open_rawlogs(svr);
     return 1;
 }
 /* stop rtk server -------------------------------------------------------------
@@ -986,6 +1046,7 @@ extern void rtksvrstop(rtksvr_t *svr, char **cmds)
 #else
     pthread_join(svr->thread,NULL);
 #endif
+    close_rawlogs();
 }
 /* open output/log stream ------------------------------------------------------
 * open output/log stream

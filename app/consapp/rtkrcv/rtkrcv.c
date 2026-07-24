@@ -38,7 +38,7 @@
 *-----------------------------------------------------------------------------*/
 #include <stdlib.h>
 #include <signal.h>
-#ifdef WIN32
+#if defined(_WIN32) || defined(WIN32)
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
@@ -59,6 +59,7 @@ typedef int socklen_t;
 #endif
 #include <errno.h>
 #include "rtklib.h"
+extern int rawlog;
 #include "vt.h"
 
 #if defined(_WIN32) || defined(WIN32)
@@ -111,7 +112,7 @@ typedef struct {                       /* console type */
 } con_t;
 
 /* function prototypes -------------------------------------------------------*/
-#ifdef WIN32
+#if defined(_WIN32) || defined(WIN32)
 #define popen _popen
 #define pclose _pclose
 #else
@@ -129,6 +130,7 @@ static char passwd[MAXSTR]="admin";     /* login password */
 static int timetype     =0;             /* time format (0:gpst,1:utc,2:jst,3:tow) */
 static int soltype      =0;             /* sol format (0:dms,1:deg,2:xyz,3:enu,4:pyl) */
 static int solflag      =2;             /* sol flag (1:std+2:age/ratio/ns) */
+static int outscreen    =0;             /* output solution to screen */
 static int strtype[]={                  /* stream types */
     STR_SERIAL,STR_NONE,STR_NONE,STR_NONE,STR_NONE,STR_NONE,STR_NONE,STR_NONE
 };
@@ -162,16 +164,29 @@ static filopt_t filopt  ={""};          /* file options */
 /* help text -----------------------------------------------------------------*/
 static const char *usage[]={
     "usage: rtkrcv [-s][-p port][-d dev][-o file][-w pwd][-r level][-t level][-sta sta]",
+    "              [-rover path][-base path][-eph path][-mode mode][-nf nf][-basepos basepos]",
+    "              [-sys system][-soltype type][-sol path][-rawlog][-screen]",
     "options",
-    "  -s         start RTK server on program startup",
-    "  -p port    port number for telnet console",
-    "  -m port    port number for monitor stream",
-    "  -d dev     terminal device for console",
-    "  -o file    processing options file",
-    "  -w pwd     login password for remote console (\"\": no password)",
-    "  -r level   output solution status file (0:off,1:states,2:residuals)",
-    "  -t level   debug trace level (0:off,1-5:on)",
-    "  -sta sta   station name for receiver dcb"
+    "  -s             start RTK server on program startup",
+    "  -p port        port number for telnet console",
+    "  -m port        port number for monitor stream",
+    "  -d dev         terminal device for console",
+    "  -o file        processing options file",
+    "  -w pwd         login password for remote console (\"\": no password)",
+    "  -r level       output solution status file (0:off,1:states,2:residuals)",
+    "  -t level       debug trace level (0:off,1-5:on)",
+    "  -sta sta       station name for receiver dcb",
+    "  -rover path    rover stream path (e.g. user:passwd@host:port/mnt)",
+    "  -base path     base stream path",
+    "  -eph path      ephemeris stream path",
+    "  -mode mode     positioning mode (0:single,1:dgps,2:kinematic,3:static,4:moving-base,5:fixed) [2]",
+    "  -nf nf         number of frequencies (1:L1,2:L1+L2,3:L1+L2+L5) [3]",
+    "  -basepos pos   base position (rtcm | xyz x y z | blh lat lon hgt)",
+    "  -sys system    navigation systems comma-separated (gps,glo,gal,bds,qzs,sbs,all)",
+    "  -soltype type  solution format type (dms | deg | xyz | enu) [dms]",
+    "  -sol path      solution output file path",
+    "  -rawlog        enable custom raw stream logs",
+    "  -screen        output solution to screen (stdout)"
 };
 static const char *helptxt[]={
     "start                 : start rtk server",
@@ -344,7 +359,7 @@ static int confwrite(vt_t *vt, const char *file)
     
     strcpy(buff,file);
     if ((p=strstr(buff,"::"))) *p='\0'; /* omit options in path */
-    if (!vt->state||!(fp=fopen(buff,"r"))) return 1; /* no existing file */
+    if (!vt||!vt->state||!(fp=fopen(buff,"r"))) return 1; /* no existing file */
     fclose(fp);
     vt_printf(vt,"overwrite %-16s ? (y/n): ",buff);
     if (!vt_gets(vt,buff,sizeof(buff))||vt->brk) return 0;
@@ -1650,6 +1665,17 @@ int main(int argc, char **argv)
     con_t *con[MAXCON]={0};
     int i,start=0,port=0,outstat=0,trace=0,sock=0;
     char *dev="",file[MAXSTR]="";
+    char rover_path[MAXSTR]="";
+    char base_path[MAXSTR]="";
+    char eph_path[MAXSTR]="";
+    char sol_path[MAXSTR]="";
+    int mode_val = -1;
+    int nf_val = -1;
+    int soltype_val = -1;
+    int sys_val = -1;
+    int basepos_mode = -1; /* 0: rtcm, 1: xyz, 2: blh */
+    double basepos_xyz[3]={0};
+    double basepos_blh[3]={0};
     
     for (i=1;i<argc;i++) {
         if      (!strcmp(argv[i],"-s")) start=1;
@@ -1661,8 +1687,63 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i],"-r")&&i+1<argc) outstat=atoi(argv[++i]);
         else if (!strcmp(argv[i],"-t")&&i+1<argc) trace=atoi(argv[++i]);
         else if (!strcmp(argv[i],"-sta")&&i+1<argc) strcpy(sta_name,argv[++i]);
+        else if (!strcmp(argv[i],"-rover")&&i+1<argc) strcpy(rover_path,argv[++i]);
+        else if (!strcmp(argv[i],"-base")&&i+1<argc) strcpy(base_path,argv[++i]);
+        else if (!strcmp(argv[i],"-eph")&&i+1<argc) strcpy(eph_path,argv[++i]);
+        else if (!strcmp(argv[i],"-mode")&&i+1<argc) mode_val=atoi(argv[++i]);
+        else if (!strcmp(argv[i],"-nf")&&i+1<argc) nf_val=atoi(argv[++i]);
+        else if (!strcmp(argv[i],"-basepos")&&i+1<argc) {
+            char *type = argv[++i];
+            if (!strcmp(type,"rtcm")) {
+                basepos_mode = 0;
+            }
+            else if (!strcmp(type,"xyz")&&i+3<argc) {
+                basepos_mode = 1;
+                basepos_xyz[0]=atof(argv[++i]);
+                basepos_xyz[1]=atof(argv[++i]);
+                basepos_xyz[2]=atof(argv[++i]);
+            }
+            else if (!strcmp(type,"blh")&&i+3<argc) {
+                basepos_mode = 2;
+                basepos_blh[0]=atof(argv[++i]);
+                basepos_blh[1]=atof(argv[++i]);
+                basepos_blh[2]=atof(argv[++i]);
+            }
+            else printusage();
+        }
+        else if (!strcmp(argv[i],"-soltype")&&i+1<argc) {
+            char *type = argv[++i];
+            if      (!strcmp(type,"dms")) soltype_val=0;
+            else if (!strcmp(type,"deg")) soltype_val=1;
+            else if (!strcmp(type,"xyz")) soltype_val=2;
+            else if (!strcmp(type,"enu")) soltype_val=3;
+            else printusage();
+        }
+        else if (!strcmp(argv[i],"-sys")&&i+1<argc) {
+            char sys_str[MAXSTR];
+            char *tok;
+            int sys = 0;
+            strcpy(sys_str,argv[++i]);
+            tok = strtok(sys_str,",");
+            while (tok) {
+                if (!strcmp(tok,"gps")||!strcmp(tok,"GPS")||!strcmp(tok,"G")||!strcmp(tok,"g")) sys |= SYS_GPS;
+                else if (!strcmp(tok,"glo")||!strcmp(tok,"GLO")||!strcmp(tok,"R")||!strcmp(tok,"r")) sys |= SYS_GLO;
+                else if (!strcmp(tok,"gal")||!strcmp(tok,"GAL")||!strcmp(tok,"E")||!strcmp(tok,"e")) sys |= SYS_GAL;
+                else if (!strcmp(tok,"bds")||!strcmp(tok,"BDS")||!strcmp(tok,"cmp")||!strcmp(tok,"CMP")||!strcmp(tok,"C")||!strcmp(tok,"c")) sys |= SYS_CMP;
+                else if (!strcmp(tok,"qzs")||!strcmp(tok,"QZS")||!strcmp(tok,"J")||!strcmp(tok,"j")) sys |= SYS_QZS;
+                else if (!strcmp(tok,"sbs")||!strcmp(tok,"SBS")||!strcmp(tok,"S")||!strcmp(tok,"s")) sys |= SYS_SBS;
+                else if (!strcmp(tok,"irn")||!strcmp(tok,"IRN")||!strcmp(tok,"I")||!strcmp(tok,"i")) sys |= SYS_IRN;
+                else if (!strcmp(tok,"all")||!strcmp(tok,"ALL")) sys = SYS_ALL;
+                tok = strtok(NULL,",");
+            }
+            if (sys > 0) sys_val = sys;
+        }
+        else if (!strcmp(argv[i],"-rawlog")) rawlog=1;
+        else if (!strcmp(argv[i],"-sol")&&i+1<argc) strcpy(sol_path,argv[++i]);
+        else if (!strcmp(argv[i],"-screen")) outscreen=1;
         else printusage();
     }
+    if (outscreen) start=1;
     if (trace>0) {
         traceopen(TRACEFILE);
         tracelevel(trace);
@@ -1672,17 +1753,88 @@ int main(int argc, char **argv)
     strinit(&moni);
     
     /* load options file */
-    if (!*file) sprintf(file,"%s/%s",OPTSDIR,OPTSFILE);
+    int opt_file_specified = *file != '\0';
+    if (!opt_file_specified) sprintf(file,"%s/%s",OPTSDIR,OPTSFILE);
     
     resetsysopts();
-    if (!loadopts(file,rcvopts)||!loadopts(file,sysopts)) {
+    FILE *fp_opts;
+    if ((fp_opts = fopen(file,"r"))) {
+        fclose(fp_opts);
+        if (!loadopts(file,rcvopts)||!loadopts(file,sysopts)) {
+            fprintf(stderr,"options file read error: %s. defaults used\n",file);
+        }
+    } else if (opt_file_specified) {
         fprintf(stderr,"no options file: %s. defaults used\n",file);
     }
     getsysopts(&prcopt,solopt,&filopt);
+
+    /* apply defaults and command line overrides */
+    if (mode_val >= 0) {
+        prcopt.mode = mode_val;
+    } else {
+        prcopt.mode = PMODE_KINEMA; /* Default to Kinematic */
+    }
+
+    if (nf_val >= 0) {
+        prcopt.nf = nf_val;
+    } else {
+        prcopt.nf = 3; /* Default to L1+L2+L5 */
+    }
+
+    if (soltype_val >= 0) {
+        soltype = soltype_val;
+    }
+
+    if (sys_val >= 0) {
+        prcopt.navsys = sys_val;
+    }
+
+    if (*rover_path) {
+        strtype[0] = STR_NTRIPCLI;
+        strcpy(strpath[0], rover_path);
+        strfmt[0] = STRFMT_RTCM3;
+    }
+    if (*base_path) {
+        strtype[1] = STR_NTRIPCLI;
+        strcpy(strpath[1], base_path);
+        strfmt[1] = STRFMT_RTCM3;
+    }
+    if (*eph_path) {
+        strtype[2] = STR_NTRIPCLI;
+        strcpy(strpath[2], eph_path);
+        strfmt[2] = STRFMT_RTCM3;
+    }
+    if (*sol_path) {
+        strtype[3] = STR_FILE;
+        strcpy(strpath[3], sol_path);
+        strfmt[3] = SOLF_LLH;
+    }
+
+    if (basepos_mode == 0) {
+        prcopt.refpos = POSOPT_RTCM;
+    }
+    else if (basepos_mode == 1) {
+        prcopt.refpos = POSOPT_POS;
+        prcopt.rb[0] = basepos_xyz[0];
+        prcopt.rb[1] = basepos_xyz[1];
+        prcopt.rb[2] = basepos_xyz[2];
+    }
+    else if (basepos_mode == 2) {
+        double pos[3];
+        prcopt.refpos = POSOPT_POS;
+        pos[0] = basepos_blh[0]*D2R;
+        pos[1] = basepos_blh[1]*D2R;
+        pos[2] = basepos_blh[2];
+        pos2ecef(pos, prcopt.rb);
+    }
     
     /* read navigation data */
-    if (!readnav(NAVIFILE,&svr.nav)) {
-        fprintf(stderr,"no navigation data: %s\n",NAVIFILE);
+    FILE *fp_nav;
+    if ((fp_nav = fopen(NAVIFILE,"r"))) {
+        fclose(fp_nav);
+        if (!readnav(NAVIFILE,&svr.nav)) {
+            fprintf(stderr,"navigation data read error: %s\n",NAVIFILE);
+        }
     }
     if (outstat>0) {
         rtkopenstat(STATFILE,outstat);
@@ -1701,7 +1853,7 @@ int main(int argc, char **argv)
             return -1;
         }
     }
-    else {
+    else if (!outscreen) {
         /* open device for local console */
         if (!(con[0]=con_open(0,dev))) {
             fprintf(stderr,"console open error dev=%s\n",dev);
@@ -1713,7 +1865,7 @@ int main(int argc, char **argv)
     }
     signal(SIGINT, sigshut); /* keyboard interrupt */
     signal(SIGTERM,sigshut); /* external shutdown signal */
-#ifndef WIN32
+#if !defined(_WIN32) && !defined(WIN32)
     signal(SIGUSR2,sigshut);
     signal(SIGHUP ,SIG_IGN);
     signal(SIGPIPE,SIG_IGN);
@@ -1726,6 +1878,16 @@ int main(int argc, char **argv)
     while (!intflg) {
         /* accept remote console connection */
         accept_sock(sock,con);
+        
+        if (outscreen) {
+            rtksvrlock(&svr);
+            for (i=0;i<svr.nsol;i++) {
+                prsolution(NULL,&svr.solbuf[i],svr.rtk.rb);
+            }
+            svr.nsol=0;
+            rtksvrunlock(&svr);
+        }
+        
         sleepms(100);
     }
     /* stop rtk server */
