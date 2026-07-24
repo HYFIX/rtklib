@@ -1869,9 +1869,7 @@ static int resamb_multistep(rtk_t *rtk, double *bias, double *xa)
             }
             free(H);
             
-            /* EWL fixed! Overwrite EKF float state and covariance with EWL-fixed states */
-            memcpy(rtk->x, x_temp, sizeof(double)*nx);
-            memcpy(rtk->P, P_temp, sizeof(double)*nx*nx);
+
         }
     }
     
@@ -1945,9 +1943,7 @@ static int resamb_multistep(rtk_t *rtk, double *bias, double *xa)
             }
             free(H);
             
-            /* WL fixed! Overwrite EKF float state and covariance with WL-fixed states */
-            memcpy(rtk->x, x_temp, sizeof(double)*nx);
-            memcpy(rtk->P, P_temp, sizeof(double)*nx*nx);
+
         }
     }
     
@@ -2037,6 +2033,10 @@ static int resamb_multistep(rtk_t *rtk, double *bias, double *xa)
     
     /* Copy full fixed state to xa */
     memcpy(xa,x_temp,sizeof(double)*nx);
+    
+    /* Overwrite EKF float state and covariance with fixed states (only on successful final fix) */
+    memcpy(rtk->x, x_temp, sizeof(double)*nx);
+    memcpy(rtk->P, P_temp, sizeof(double)*nx*nx);
     
     free(x_temp); free(P_temp);
     return n_c;
