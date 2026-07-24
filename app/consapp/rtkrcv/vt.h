@@ -8,7 +8,9 @@
 *-----------------------------------------------------------------------------*/
 #ifndef VT_H
 #define VT_H
+#ifndef WIN32
 #include <termios.h>
+#endif
 #include "rtklib.h"
 
 #define MAXBUFF     4096                /* size of line buffer */
@@ -24,7 +26,9 @@ typedef struct vt_tag {                 /* virtual console type */
     int cur_h;                          /* current history */
     int brk;                            /* break status */
     int blind;                          /* blind inpu mode */
+#ifndef WIN32
     struct termios tio;                 /* original terminal attribute */
+#endif
     char buff[MAXBUFF];                 /* line buffer */
     char esc[8];                        /* escape buffer */
     char *hist[MAXHIST];                /* history buffer */

@@ -35,7 +35,7 @@ add_executable(str2str
     )
 
 if(WIN32)
-    target_link_libraries(str2str Winmm.lib)
+    target_link_libraries(str2str Winmm.lib ws2_32.lib)
 else()
-    target_link_libraries(str2str m)
+    target_link_libraries(str2str m pthread)
 endif()

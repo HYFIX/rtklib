@@ -46,7 +46,7 @@ add_executable(rtkrcv
     )
 
 if(WIN32)
-    target_link_libraries(rtkrcv Winmm.lib)
+    target_link_libraries(rtkrcv Winmm.lib ws2_32.lib)
 else()
-    target_link_libraries(rtkrcv m)
+    target_link_libraries(rtkrcv m pthread)
 endif()

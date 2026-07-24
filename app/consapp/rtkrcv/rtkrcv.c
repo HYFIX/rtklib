@@ -38,6 +38,14 @@
 *-----------------------------------------------------------------------------*/
 #include <stdlib.h>
 #include <signal.h>
+#ifdef WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+#include <conio.h>
+#define close(s) closesocket(s)
+typedef int socklen_t;
+#else
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/types.h>
@@ -48,9 +56,32 @@
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <netdb.h>
+#endif
 #include <errno.h>
 #include "rtklib.h"
 #include "vt.h"
+
+#if defined(_WIN32) || defined(WIN32)
+#define thread_t       HANDLE
+#define THREAD_RET     DWORD
+#define THREAD_CALL    WINAPI
+#define thread_create(thread, func, arg) \
+    ((*(thread) = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)(func), (arg), 0, NULL)) ? 0 : 1)
+#define thread_join(thread) \
+    (WaitForSingleObject((thread), INFINITE), CloseHandle((thread)))
+#define thread_detach(thread) \
+    CloseHandle(thread)
+#else
+#define thread_t       pthread_t
+#define THREAD_RET     void *
+#define THREAD_CALL
+#define thread_create(thread, func, arg) \
+    pthread_create((thread), NULL, (func), (arg))
+#define thread_join(thread) \
+    pthread_join((thread), NULL)
+#define thread_detach(thread) \
+    pthread_detach(thread)
+#endif
 
 #define PRGNAME     "rtkrcv"            /* program name */
 #define CMDPROMPT   "rtkrcv> "          /* command prompt */
@@ -76,12 +107,17 @@
 typedef struct {                       /* console type */
     int state;                         /* state (0:stop,1:run) */
     vt_t *vt;                          /* virtual terminal */
-    pthread_t thread;                  /* console thread */
+    thread_t thread;                   /* console thread */
 } con_t;
 
 /* function prototypes -------------------------------------------------------*/
+#ifdef WIN32
+#define popen _popen
+#define pclose _pclose
+#else
 extern FILE *popen(const char *, const char *);
 extern int pclose(FILE *);
+#endif
 
 /* global variables ----------------------------------------------------------*/
 static rtksvr_t svr;                    /* rtk server struct */
@@ -258,7 +294,7 @@ static void chop(char *str)
     for (p=str+strlen(str)-1;p>=str&&!isgraph((int)*p);p--) *p='\0';
 }
 /* thread to send keep alive for monitor port --------------------------------*/
-static void *sendkeepalive(void *arg)
+static THREAD_RET THREAD_CALL sendkeepalive(void *arg)
 {
     trace(3,"sendkeepalive: start\n");
     
@@ -267,12 +303,12 @@ static void *sendkeepalive(void *arg)
         sleepms(INTKEEPALIVE);
     }
     trace(3,"sendkeepalive: stop\n");
-    return NULL;
+    return (THREAD_RET)0;
 }
 /* open monitor port ---------------------------------------------------------*/
 static int openmoni(int port)
 {
-    pthread_t thread;
+    thread_t thread;
     char path[64];
     
     trace(3,"openmomi: port=%d\n",port);
@@ -281,7 +317,9 @@ static int openmoni(int port)
     if (!stropen(&moni,STR_TCPSVR,STR_MODE_RW,path)) return 0;
     strsettimeout(&moni,timeout,reconnect);
     keepalive=1;
-    pthread_create(&thread,NULL,sendkeepalive,NULL);
+    if (thread_create(&thread,sendkeepalive,NULL)==0) {
+        thread_detach(thread);
+    }
     return 1;
 }
 /* close monitor port --------------------------------------------------------*/
@@ -634,7 +672,7 @@ static void prstatus(vt_t *vt)
     };
     const char *freq[]={"-","L1","L1+L2","L1+L2+L5","","",""};
     rtcm_t rtcm[3];
-    int i,j,n,thread,cycle,state,rtkstat,nsat0,nsat1,prcout,nave;
+    int i,j,n,cycle,state,rtkstat,nsat0,nsat1,prcout,nave;
     int cputime,nb[3]={0},nmsg[3][10]={{0}};
     char tstr[64],s[1024],*p;
     double runtime,rt[3]={0},dop[4]={0},rr[3],bl1=0.0,bl2=0.0;
@@ -644,7 +682,6 @@ static void prstatus(vt_t *vt)
     
     rtksvrlock(&svr);
     rtk=svr.rtk;
-    thread=(int)svr.thread;
     cycle=svr.cycle;
     state=svr.state;
     rtkstat=svr.rtk.sol.stat;
@@ -676,7 +713,7 @@ static void prstatus(vt_t *vt)
     
     vt_printf(vt,"\n%s%-28s: %s%s\n",ESC_BOLD,"Parameter","Value",ESC_RESET);
     vt_printf(vt,"%-28s: %s %s\n","rtklib version",VER_RTKLIB,PATCH_LEVEL);
-    vt_printf(vt,"%-28s: %d\n","rtk server thread",thread);
+    vt_printf(vt,"%-28s: %p\n","rtk server thread",(void *)svr.thread);
     vt_printf(vt,"%-28s: %s\n","rtk server state",svrstate[state]);
     vt_printf(vt,"%-28s: %d\n","processing cycle (ms)",cycle);
     vt_printf(vt,"%-28s: %s\n","positioning mode",mode[rtk.opt.mode]);
@@ -1328,7 +1365,7 @@ static int cmd_exec(const char *cmd, vt_t *vt)
     return ret;
 }
 /* console thread ------------------------------------------------------------*/
-static void *con_thread(void *arg)
+static THREAD_RET THREAD_CALL con_thread(void *arg)
 {
     const char *cmds[]={
         "start","stop","restart","solution","status","satellite","observ",
@@ -1407,7 +1444,7 @@ static void *con_thread(void *arg)
         }
     }
     vt_close(con->vt);
-    return 0;
+    return (THREAD_RET)0;
 }
 /* open console --------------------------------------------------------------*/
 static con_t *con_open(int sock, const char *dev)
@@ -1424,7 +1461,7 @@ static con_t *con_open(int sock, const char *dev)
     }
     /* start console thread */
     con->state=1;
-    if (pthread_create(&con->thread,NULL,con_thread,con)) {
+    if (thread_create(&con->thread,con_thread,con)) {
         free(con);
         return NULL;
     }
@@ -1437,7 +1474,7 @@ static void con_close(con_t *con)
     
     if (!con) return;
     con->state=con->vt->state=0;
-    pthread_join(con->thread,NULL);
+    thread_join(con->thread);
     free(con);
 }
 /* open socket for remote console --------------------------------------------*/
@@ -1676,9 +1713,11 @@ int main(int argc, char **argv)
     }
     signal(SIGINT, sigshut); /* keyboard interrupt */
     signal(SIGTERM,sigshut); /* external shutdown signal */
+#ifndef WIN32
     signal(SIGUSR2,sigshut);
     signal(SIGHUP ,SIG_IGN);
     signal(SIGPIPE,SIG_IGN);
+#endif
     
     /* start rtk server */
     if (start) {
