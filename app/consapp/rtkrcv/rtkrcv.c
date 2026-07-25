@@ -161,12 +161,13 @@ static prcopt_t prcopt;                 /* processing options */
 static solopt_t solopt[2]={{0}};        /* solution options */
 static filopt_t filopt  ={""};          /* file options */
 extern int partial_ar;
+extern int bie_ar;
 
 /* help text -----------------------------------------------------------------*/
 static const char *usage[]={
     "usage: rtkrcv [-s][-p port][-d dev][-o file][-w pwd][-r level][-t level][-sta sta]",
     "              [-rover path][-base path][-eph path][-mode mode][-nf nf][-basepos basepos]",
-    "              [-sys system][-soltype type][-sol path][-rawlog][-screen][-armode mode][-par]",
+    "              [-sys system][-soltype type][-sol path][-rawlog][-screen][-armode mode][-par][-bie]",
     "options",
     "  -s             start RTK server on program startup",
     "  -p port        port number for telnet console",
@@ -190,7 +191,9 @@ static const char *usage[]={
     "  -screen        output solution to screen (stdout)",
     "  -armode mode   AR mode (off | cont | inst | fixhold | wlnl | tcar)",
     "  -par           enable partial ambiguity resolution (default)",
-    "  -nopar         disable partial ambiguity resolution"
+    "  -nopar         disable partial ambiguity resolution",
+    "  -bie           use best integer equivariant (BIE) estimator instead of ILS fix (default)",
+    "  -nobie         disable BIE estimator, use standard ILS fix"
 };
 static const char *helptxt[]={
     "start                 : start rtk server",
@@ -1679,6 +1682,7 @@ int main(int argc, char **argv)
     int sys_val = -1;
     int armode_val = -1;
     int partialar_val = -1;
+    int bie_val = -1;
     int basepos_mode = -1; /* 0: rtcm, 1: xyz, 2: blh */
     double basepos_xyz[3]={0};
     double basepos_blh[3]={0};
@@ -1759,6 +1763,8 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i],"-screen")) outscreen=1;
         else if (!strcmp(argv[i],"-par")||!strcmp(argv[i],"-partialar")) partialar_val=1;
         else if (!strcmp(argv[i],"-nopar")||!strcmp(argv[i],"-nopartialar")) partialar_val=0;
+        else if (!strcmp(argv[i],"-bie")) bie_val=1;
+        else if (!strcmp(argv[i],"-nobie")) bie_val=0;
         else printusage();
     }
     if (outscreen) start=1;
@@ -1813,6 +1819,10 @@ int main(int argc, char **argv)
 
     if (partialar_val >= 0) {
         partial_ar = partialar_val;
+    }
+
+    if (bie_val >= 0) {
+        bie_ar = bie_val;
     }
 
     if (*rover_path) {

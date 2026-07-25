@@ -12,3 +12,6 @@ Debug_Build
 __history
 __astcache
 CMakeFiles
+/build/
+/log/
+*.log

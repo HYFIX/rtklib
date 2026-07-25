@@ -296,3 +296,22 @@ UPDATE HISTORY
    output debug msg in rtcm decoder (rtcm3.c)
 
    
+2026/07/24  2.4.3 b36
+   RTKRCV:
+      refactor console app to compile natively on Windows, Linux and macOS (native console i/o, thread/mutex wrappers)
+      add command line overrides: -mode, -nf, -basepos, -sys, -soltype, -sol, -screen, -armode, -rawlog, -par/-nopar, -bie/-nobie
+      fix null pointer crash in console/vt handling
+   AMBIGUITY RESOLUTION:
+      add 3-step/2-step sequential (widelane/narrowlane) ambiguity resolution
+      add partial ambiguity resolution (pos2-partialar) and make it the default
+      stabilize EKF and multi-step/partial AR: 10-epoch lock-count filter before allowing a fix, 1e-4 diagonal loading on subset covariance, variance-based subset ordering
+      restrict EKF state feedback to successful, fully-resolved fixed epochs only, preventing filter contamination from float/partial-fix transients
+      add best integer equivariant (BIE) estimator (pos2-bie, -bie/-nobie) as an alternative to ILS integer fixing, weighting the top LAMBDA candidates by likelihood instead of hard-fixing to the single best candidate; enabled by default
+   RAW LOGGING:
+      add optional raw stream logging (-rawlog): one log file per input stream (rover/base/eph), named <gps-time>-<mountpoint>.log with GPS time (not local time) in the file name and in the $GEOD record header
+      rotate raw log files every GPS hour instead of one file per session
+      open raw log files lazily on first data per stream instead of eagerly at server start, so a slow-to-connect NTRIP stream no longer loses its entire log
+      open raw log files in binary mode; text mode on Windows silently rewrote 0x0A bytes inside the raw payload to 0x0D 0x0A, corrupting frames and causing spurious CRC failures / data gaps downstream
+   BUILD:
+      ignore build/ and log/ output directories in .gitignore
+

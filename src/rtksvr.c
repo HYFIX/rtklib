@@ -44,13 +44,13 @@
 *                            use integer types in stdint.h
 *-----------------------------------------------------------------------------*/
 #include "rtklib.h"
-#include <time.h>
 
 #define MIN_INT_RESET   30000   /* mininum interval of reset command (ms) */
 
 /* custom raw data logging definitions */
 int rawlog = 0;
 static FILE *fp_rawlog[3] = {NULL, NULL, NULL};
+static long long rawlog_hour[3] = {-1,-1,-1}; /* GPS hour bucket of the currently open rawlog file, per stream */
 
 static void get_mountpoint(const char *path, char *mountpoint)
 {
@@ -62,27 +62,60 @@ static void get_mountpoint(const char *path, char *mountpoint)
     }
 }
 
-static void open_rawlogs(rtksvr_t *svr)
+/* open raw log file for one stream, lazily on first data --------------------
+* file name: yyyy-mm-dd-hh-MM-SS-<mountpoint>.log, timestamped with GPS time
+* (not local/system time). record format: $GEOD,utc_in_ms,buffer_length,
+* raw_rtcm_buffer\r\n
+* Opened on first actual data for the stream rather than eagerly at server
+* start, since streams (esp. NTRIP/TCP) connect asynchronously and may not
+* be state>0 yet right after rtksvrstart() creates the server thread;
+* opening eagerly could skip a stream's log entirely if its connection had
+* not completed yet.
+*-----------------------------------------------------------------------------*/
+static void open_rawlog(rtksvr_t *svr, int index)
 {
-    time_t rawtime;
-    struct tm *timeinfo;
-    char time_str[64];
-    char filename[512];
-    char mnt[128];
-    int i;
-    
-    if (!rawlog) return;
-    
-    time(&rawtime);
-    timeinfo = localtime(&rawtime);
-    strftime(time_str, sizeof(time_str), "%Y-%m-%d-%H-%M-%S", timeinfo);
-    
-    for (i=0;i<3;i++) {
-        if (svr->stream[i].state>0) {
-            get_mountpoint(svr->stream[i].path, mnt);
-            sprintf(filename, "%s-%s.log", time_str, mnt);
-            fp_rawlog[i] = fopen(filename, "w");
-        }
+    gtime_t gt;
+    double ep[6];
+    char time_str[32],filename[512],mnt[128];
+
+    if (!rawlog||fp_rawlog[index]) return;
+
+    gt=utc2gpst(timeget());
+    time2epoch(gt,ep);
+    sprintf(time_str,"%04.0f-%02.0f-%02.0f-%02.0f-%02.0f-%02.0f",
+            ep[0],ep[1],ep[2],ep[3],ep[4],ep[5]);
+
+    get_mountpoint(svr->stream[index].path,mnt);
+    sprintf(filename,"%s-%s.log",time_str,mnt);
+
+    /* "wb": must be binary mode. On Windows, text mode ("w") silently
+       rewrites any 0x0A byte in the raw receiver payload to 0x0D 0x0A,
+       which corrupts the frame (actual bytes on disk no longer match the
+       length written in the $GEOD header) and desyncs any downstream
+       parser/CRC check - showing up as spurious CRC failures and data
+       gaps even though nothing was actually lost on the wire. */
+    if (!(fp_rawlog[index]=fopen(filename,"wb"))) {
+        tracet(1,"open_rawlog: open error file=%s\n",filename);
+        return;
+    }
+    rawlog_hour[index]=(long long)gt.time/3600;
+}
+
+/* close and reopen the raw log file for one stream if the GPS hour has
+* rolled over since it was opened, so raw logs rotate to a new file at
+* every hour boundary instead of growing for the whole session -----------*/
+static void rotate_rawlog(rtksvr_t *svr, int index)
+{
+    gtime_t gt;
+    long long hour;
+
+    if (!rawlog||!fp_rawlog[index]) return;
+
+    gt=utc2gpst(timeget());
+    hour=(long long)gt.time/3600;
+    if (hour!=rawlog_hour[index]) {
+        fclose(fp_rawlog[index]);
+        fp_rawlog[index]=NULL;
     }
 }
 
@@ -641,13 +674,19 @@ static void *rtksvrthread(void *arg)
                 continue;
             }
             /* log raw data buffer */
-            if (rawlog && fp_rawlog[i]) {
-                gtime_t t_now = timeget();
-                long long utc_ms = (long long)t_now.time * 1000 + (long long)(t_now.sec * 1000);
-                fprintf(fp_rawlog[i], "$GEOD,%lld,%d,", utc_ms, n);
-                fwrite(p, 1, n, fp_rawlog[i]);
-                fprintf(fp_rawlog[i], "\r\n");
-                fflush(fp_rawlog[i]);
+            if (rawlog) {
+                rotate_rawlog(svr,i); /* close file if the GPS hour has rolled over */
+                open_rawlog(svr,i);   /* lazy open, named with GPS time */
+                if (fp_rawlog[i]) {
+                    gtime_t t_now = timeget(); /* utc */
+                    long long utc_ms = (long long)t_now.time * 1000 + (long long)(t_now.sec * 1000);
+                    fprintf(fp_rawlog[i], "$GEOD,%lld,%d,", utc_ms, n);
+                    if (fwrite(p, 1, n, fp_rawlog[i])!=(size_t)n) {
+                        tracet(1,"rtksvrthread: rawlog write error i=%d n=%d\n",i,n);
+                    }
+                    fprintf(fp_rawlog[i], "\r\n");
+                    fflush(fp_rawlog[i]);
+                }
             }
             /* write receiver raw/rtcm data to log stream */
             strwrite(svr->stream+i+5,p,n);
@@ -1011,7 +1050,6 @@ extern int rtksvrstart(rtksvr_t *svr, int cycle, int buffsize, int *strs,
         sprintf(errmsg,"thread create error\n");
         return 0;
     }
-    open_rawlogs(svr);
     return 1;
 }
 /* stop rtk server -------------------------------------------------------------

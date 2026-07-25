@@ -40,6 +40,7 @@ static double antpos_[2][3];
 static char exsats_[1024];
 static char snrmask_[NFREQ][1024];
 extern int partial_ar;
+extern int bie_ar;
 
 /* system options table ------------------------------------------------------*/
 #define SWTOPT  "0:off,1:on"
@@ -92,6 +93,7 @@ EXPORT opt_t sysopts[]={
     {"pos2-gloarmode",  3,  (void *)&prcopt_.glomodear,  GAROPT },
     {"pos2-bdsarmode",  3,  (void *)&prcopt_.bdsmodear,  SWTOPT },
     {"pos2-partialar",  3,  (void *)&partial_ar,         SWTOPT },
+    {"pos2-bie",        3,  (void *)&bie_ar,             SWTOPT },
     {"pos2-arthres",    1,  (void *)&prcopt_.thresar[0], ""     },
     {"pos2-arthres1",   1,  (void *)&prcopt_.thresar[1], ""     },
     {"pos2-arthres2",   1,  (void *)&prcopt_.thresar[2], ""     },

@@ -95,6 +95,9 @@ static FILE *fp_stat=NULL;       /* rtk status file pointer */
 static char file_stat[1024]="";  /* rtk status file original path */
 static gtime_t time_stat={0};    /* rtk status file time */
 int partial_ar = 1;             /* partial ambiguity resolution flag */
+int bie_ar = 1;                 /* best integer equivariant (BIE) estimator flag */
+
+#define BIE_NCAND   20           /* max number of integer candidates used by BIE */
 
 /* open solution status file ---------------------------------------------------
 * open solution status file and set output level
@@ -2084,6 +2087,68 @@ static int resamb_LAMBDA(rtk_t *rtk, double *bias, double *xa)
     }
     for (j=0;j<nb;j++) for (i=0;i<na;i++) {
         Qab[i+j*na]=rtk->P[i+ix[j*2]*nx]-rtk->P[i+ix[j*2+1]*nx];
+    }
+    /* best integer equivariant (BIE) estimation ------------------------------
+     * average the BIE_NCAND best integer candidates from the LAMBDA search,
+     * weighted by their likelihood exp(-0.5*s) (s = squared norm from the
+     * search), giving the minimum mean-squared-error ambiguity estimator
+     * (Teunissen, 1999) instead of hard-fixing to the single best ILS
+     * candidate. unlike ILS there is no accept/reject ratio test - the
+     * weighted combination is always used as the "fixed" solution. */
+    if (bie_ar) {
+        int m=nb+1<BIE_NCAND?nb+1:BIE_NCAND;
+        double *bm,*sm,*w,*bias_bie,smin,wsum;
+        int info_bie;
+
+        if (m<2) m=2;
+        bm=mat(nb,m); sm=mat(m,1); w=mat(m,1); bias_bie=mat(nb,1);
+
+        if (!(info_bie=lambda(nb,m,y,Qb,bm,sm))) {
+            smin=sm[0]; wsum=0.0;
+            for (j=0;j<m;j++) wsum+=(w[j]=exp(-0.5*(sm[j]-smin)));
+            for (j=0;j<m;j++) w[j]/=wsum;
+            for (i=0;i<nb;i++) {
+                bias_bie[i]=0.0;
+                for (j=0;j<m;j++) bias_bie[i]+=w[j]*bm[i+j*nb];
+            }
+            rtk->sol.ratio=sm[0]>0?(float)(sm[1]/sm[0]):0.0f;
+            if (rtk->sol.ratio>999.9) rtk->sol.ratio=999.9f;
+
+            printf("BIE AR: count=%d, ncand=%d, ratio=%.2f - APPLIED\n",
+                   nb,m,rtk->sol.ratio);
+
+            for (i=0;i<na;i++) {
+                rtk->xa[i]=rtk->x[i];
+                for (j=0;j<na;j++) rtk->Pa[i+j*na]=rtk->P[i+j*nx];
+            }
+            for (i=0;i<nb;i++) {
+                bias[i]=bias_bie[i];
+                y[i]-=bias_bie[i];
+            }
+            if (!matinv(Qb,nb)) {
+                matmul("NN",nb,1,nb, 1.0,Qb ,y,0.0,db);
+                matmul("NN",na,1,nb,-1.0,Qab,db,1.0,rtk->xa);
+
+                /* covariance of BIE solution (Qa=Qa-Qab*Qb^-1*Qab') */
+                matmul("NN",na,nb,nb, 1.0,Qab,Qb ,0.0,QQ);
+                matmul("NT",na,na,nb,-1.0,QQ ,Qab,1.0,rtk->Pa);
+
+                trace(3,"resamb_LAMBDA(BIE): nb=%d ncand=%d ratio=%.2f\n",
+                      nb,m,rtk->sol.ratio);
+
+                restamb(rtk,bias,nb,xa);
+            }
+            else nb=0;
+        }
+        else {
+            errmsg(rtk,"BIE lambda search failed (info=%d)\n",info_bie);
+            nb=0;
+        }
+        free(bm); free(sm); free(w); free(bias_bie);
+
+        free(ix);
+        free(y); free(DP); free(b); free(db); free(Qb); free(Qab); free(QQ);
+        return nb;
     }
     /* LAMBDA/MLAMBDA ILS (integer least-square) estimation */
     if (!(info=lambda(nb,2,y,Qb,b,s))) {
