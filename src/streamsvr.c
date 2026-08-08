@@ -502,14 +502,14 @@ static void *strsvrthread(void *arg)
             if (svr->rtcmdec) {
                 int k;
                 for (k=0;k<n;k++) {
-                    int ret;
+                    svr->rtcm.msgtype[0]='\0';
                     if (svr->rtcmdec_fmt==STRFMT_RTCM2) {
-                        ret=input_rtcm2(&svr->rtcm,svr->buff[k]);
+                        input_rtcm2(&svr->rtcm,svr->buff[k]);
                     }
                     else {
-                        ret=input_rtcm3(&svr->rtcm,svr->buff[k]);
+                        input_rtcm3(&svr->rtcm,svr->buff[k]);
                     }
-                    if (ret!=0) {
+                    if (svr->rtcm.msgtype[0]!='\0') {
                         if (svr->rtcmdec==1) { /* stdout */
                             printf("%s\n",svr->rtcm.msgtype);
                             fflush(stdout);
