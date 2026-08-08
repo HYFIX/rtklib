@@ -498,6 +498,29 @@ static void *strsvrthread(void *arg)
         /* read data from input stream */
         while ((n=strread(svr->stream,svr->buff,svr->buffsize))>0&&svr->state) {
             
+            /* decode RTCM if option enabled */
+            if (svr->rtcmdec) {
+                int k;
+                for (k=0;k<n;k++) {
+                    int ret;
+                    if (svr->rtcmdec_fmt==STRFMT_RTCM2) {
+                        ret=input_rtcm2(&svr->rtcm,svr->buff[k]);
+                    }
+                    else {
+                        ret=input_rtcm3(&svr->rtcm,svr->buff[k]);
+                    }
+                    if (ret!=0) {
+                        if (svr->rtcmdec==1) { /* stdout */
+                            printf("%s\n",svr->rtcm.msgtype);
+                            fflush(stdout);
+                        }
+                        else if (svr->rtcmdec==2) { /* stderr */
+                            fprintf(stderr,"%s\n",svr->rtcm.msgtype);
+                        }
+                    }
+                }
+            }
+            
             /* write data to output streams */
             for (i=1;i<svr->nstr;i++) {
                 if (svr->conv[i-1]) {
@@ -578,6 +601,9 @@ extern void strsvrinit(strsvr_t *svr, int nout)
     svr->nstr=i;
     for (i=0;i<16;i++) svr->conv[i]=NULL;
     svr->thread=0;
+    svr->rtcmdec=0;
+    svr->rtcmdec_fmt=0;
+    memset(&svr->rtcm,0,sizeof(rtcm_t));
     initlock(&svr->lock);
 }
 /* start stream server ---------------------------------------------------------
@@ -694,6 +720,11 @@ extern int strsvrstart(strsvr_t *svr, int *opts, int *strs, char **paths,
     }
     svr->state=1;
     
+    if (svr->rtcmdec) {
+        init_rtcm(&svr->rtcm);
+        svr->rtcm.outtype=1;
+    }
+    
     /* create stream server thread */
 #if defined(_WIN32) || defined(WIN32)
     if (!(svr->thread=CreateThread(NULL,0,strsvrthread,svr,0,NULL))) {
@@ -734,6 +765,10 @@ extern void strsvrstop(strsvr_t *svr, char **cmds)
 #else
     pthread_join(svr->thread,NULL);
 #endif
+
+    if (svr->rtcmdec) {
+        free_rtcm(&svr->rtcm);
+    }
 }
 /* get stream server status ----------------------------------------------------
 * get status of stream server

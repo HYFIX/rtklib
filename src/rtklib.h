@@ -1222,6 +1222,9 @@ typedef struct {        /* stream server type */
     strconv_t *conv[16]; /* stream converter */
     thread_t thread;    /* server thread */
     lock_t lock;        /* lock flag */
+    int rtcmdec;        /* show rtcm decode info (0:no, 1:stdout, 2:stderr) */
+    int rtcmdec_fmt;    /* RTCM decode format (STRFMT_RTCM2 or STRFMT_RTCM3) */
+    rtcm_t rtcm;        /* rtcm decode struct */
 } strsvr_t;
 
 typedef struct {        /* RTK server type */
