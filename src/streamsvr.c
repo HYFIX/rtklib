@@ -424,7 +424,7 @@ static void update_roti(strsvr_t *svr, const obs_t *obs, const nav_t *nav)
     gtime_t time;
     double c=299792458.0;
     double f1,f2,lam1,lam2,phi_gf,tec,dt;
-    int i,j,sat,sys,prn,idx;
+    int i,j,f,sat,sys,prn,idx,f1_idx,f2_idx;
     char sat_id[32];
     char out_str[4096]="";
     char *p=out_str;
@@ -436,16 +436,23 @@ static void update_roti(strsvr_t *svr, const obs_t *obs, const nav_t *nav)
         sat=obs->data[i].sat;
         sys=satsys(sat,&prn);
         
-        f1=sat2freq(sat,obs->data[i].code[0],nav);
-        f2=sat2freq(sat,obs->data[i].code[1],nav);
-        if (f1<=0.0||f2<=0.0) continue;
+        f1_idx=-1; f2_idx=-1;
+        for (f=0;f<NFREQ;f++) {
+            if (obs->data[i].L[f]!=0.0&&obs->data[i].code[f]!=CODE_NONE) {
+                if (f1_idx==-1) f1_idx=f;
+                else if (f2_idx==-1) { f2_idx=f; break; }
+            }
+        }
+        if (f1_idx==-1||f2_idx==-1) continue;
         
-        if (obs->data[i].L[0]==0.0||obs->data[i].L[1]==0.0) continue;
+        f1=sat2freq(sat,obs->data[i].code[f1_idx],nav);
+        f2=sat2freq(sat,obs->data[i].code[f2_idx],nav);
+        if (f1<=0.0||f2<=0.0) continue;
         
         lam1=c/f1;
         lam2=c/f2;
         
-        phi_gf=lam1*obs->data[i].L[0]-lam2*obs->data[i].L[1];
+        phi_gf=lam1*obs->data[i].L[f1_idx]-lam2*obs->data[i].L[f2_idx];
         
         tec=phi_gf/(40.3e16*(1.0/(f2*f2)-1.0/(f1*f1)));
         
@@ -454,7 +461,7 @@ static void update_roti(strsvr_t *svr, const obs_t *obs, const nav_t *nav)
         roti_sat_t *rs=&svr->roti_sat[idx];
         
         /* cycle slip check */
-        if ((obs->data[i].LLI[0]&1)||(obs->data[i].LLI[1]&1)) {
+        if ((obs->data[i].LLI[f1_idx]&1)||(obs->data[i].LLI[f2_idx]&1)) {
             rs->n=0;
         }
         else if (rs->n>0) {
@@ -532,7 +539,7 @@ static void update_mp(strsvr_t *svr, const obs_t *obs, const nav_t *nav)
     gtime_t time;
     double c=299792458.0;
     double f1,f2,lam1,lam2,alpha,phi1,phi2,p1,p2,mp12,mp21,tec;
-    int i,sat,sys,prn,idx,slip;
+    int i,f,sat,sys,prn,idx,slip,f1_idx,f2_idx;
     char sat_id[32];
     char out_str1[4096]="";
     char out_str2[4096]="";
@@ -546,21 +553,27 @@ static void update_mp(strsvr_t *svr, const obs_t *obs, const nav_t *nav)
         sat=obs->data[i].sat;
         sys=satsys(sat,&prn);
         
-        f1=sat2freq(sat,obs->data[i].code[0],nav);
-        f2=sat2freq(sat,obs->data[i].code[1],nav);
-        if (f1<=0.0||f2<=0.0) continue;
+        f1_idx=-1; f2_idx=-1;
+        for (f=0;f<NFREQ;f++) {
+            if (obs->data[i].L[f]!=0.0&&obs->data[i].P[f]!=0.0&&obs->data[i].code[f]!=CODE_NONE) {
+                if (f1_idx==-1) f1_idx=f;
+                else if (f2_idx==-1) { f2_idx=f; break; }
+            }
+        }
+        if (f1_idx==-1||f2_idx==-1) continue;
         
-        if (obs->data[i].L[0]==0.0||obs->data[i].L[1]==0.0) continue;
-        if (obs->data[i].P[0]==0.0||obs->data[i].P[1]==0.0) continue;
+        f1=sat2freq(sat,obs->data[i].code[f1_idx],nav);
+        f2=sat2freq(sat,obs->data[i].code[f2_idx],nav);
+        if (f1<=0.0||f2<=0.0) continue;
         
         lam1=c/f1;
         lam2=c/f2;
         alpha=(f1*f1)/(f2*f2);
         
-        phi1=lam1*obs->data[i].L[0];
-        phi2=lam2*obs->data[i].L[1];
-        p1=obs->data[i].P[0];
-        p2=obs->data[i].P[1];
+        phi1=lam1*obs->data[i].L[f1_idx];
+        phi2=lam2*obs->data[i].L[f2_idx];
+        p1=obs->data[i].P[f1_idx];
+        p2=obs->data[i].P[f2_idx];
         
         /* MP12 and MP21 formulas based on TEQC */
         mp12=p1-(1.0+2.0/(alpha-1.0))*phi1+(2.0/(alpha-1.0))*phi2;
@@ -575,11 +588,11 @@ static void update_mp(strsvr_t *svr, const obs_t *obs, const nav_t *nav)
         
         /* cycle slip check */
         slip=0;
-        if (obs->data[i].LLI[0]&1) {
+        if (obs->data[i].LLI[f1_idx]&1) {
             ms->mp1_cs++;
             slip=1;
         }
-        if (obs->data[i].LLI[1]&1) {
+        if (obs->data[i].LLI[f2_idx]&1) {
             ms->mp2_cs++;
             slip=1;
         }
@@ -604,8 +617,8 @@ static void update_mp(strsvr_t *svr, const obs_t *obs, const nav_t *nav)
         
         ms->last_tec=tec;
         ms->n_valid++;
-        ms->code1=obs->data[i].code[0];
-        ms->code2=obs->data[i].code[1];
+        ms->code1=obs->data[i].code[f1_idx];
+        ms->code2=obs->data[i].code[f2_idx];
         
         /* update stats */
         ms->n++;
