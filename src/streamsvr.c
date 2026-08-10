@@ -877,24 +877,36 @@ static void *strsvrthread(void *arg)
         /* read data from input stream */
         while ((n=strread(svr->stream,svr->buff,svr->buffsize))>0&&svr->state) {
             
-            /* decode RTCM if option enabled */
-            if (svr->rtcmdec) {
-                int k;
+            /* decode RTCM for msgtype display and/or ROTI/MP computation.
+             * When a converter is configured, obs/nav come from conv->out.
+             * When there is NO converter (pure relay), we must decode here. */
+            if (svr->rtcmdec || svr->roti || svr->mp) {
+                int k,ret2;
                 for (k=0;k<n;k++) {
                     svr->rtcm.msgtype[0]='\0';
                     if (svr->rtcmdec_fmt==STRFMT_RTCM2) {
-                        input_rtcm2(&svr->rtcm,svr->buff[k]);
+                        ret2=input_rtcm2(&svr->rtcm,svr->buff[k]);
                     }
                     else {
-                        input_rtcm3(&svr->rtcm,svr->buff[k]);
+                        ret2=input_rtcm3(&svr->rtcm,svr->buff[k]);
                     }
-                    if (svr->rtcm.msgtype[0]!='\0') {
-                        if (svr->rtcmdec==1) { /* stdout */
+                    /* print RTCM decode info if requested */
+                    if (svr->rtcmdec && svr->rtcm.msgtype[0]!='\0') {
+                        if (svr->rtcmdec==1) {
                             printf("%s\n",svr->rtcm.msgtype);
                             fflush(stdout);
                         }
-                        else if (svr->rtcmdec==2) { /* stderr */
+                        else if (svr->rtcmdec==2) {
                             fprintf(stderr,"%s\n",svr->rtcm.msgtype);
+                        }
+                    }
+                    /* update ROTI/MP from decoded obs (when no converter present) */
+                    if (ret2==1) {
+                        int has_conv=0,ci;
+                        for (ci=0;ci<svr->nstr-1;ci++) if (svr->conv[ci]) { has_conv=1; break; }
+                        if (!has_conv) {
+                            if (svr->roti) update_roti(svr,&svr->rtcm.obs,&svr->rtcm.nav);
+                            if (svr->mp)   update_mp  (svr,&svr->rtcm.obs,&svr->rtcm.nav);
                         }
                     }
                 }

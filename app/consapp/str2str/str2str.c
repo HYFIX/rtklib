@@ -330,7 +330,7 @@ int main(int argc, char **argv)
         if (*cmdfile[i]) readcmd(cmdfile[i],cmds[i],0);
         if (*cmdfile[i]) readcmd(cmdfile[i],cmds_periodic[i],2);
     }
-    if (rtcmdec) {
+    {
         /* check if stdout is used for binary output stream */
         int stdout_used = 0;
         for (i=0; i<n; i++) {
@@ -339,30 +339,19 @@ int main(int argc, char **argv)
                 break;
             }
         }
-        strsvr.rtcmdec = stdout_used ? 2 : 1;
-        strsvr.rtcmdec_fmt = (fmts[0] == STRFMT_RTCM2) ? STRFMT_RTCM2 : STRFMT_RTCM3;
-    }
-    if (roti) {
-        /* check if stdout is used for binary output stream */
-        int stdout_used = 0;
-        for (i=0; i<n; i++) {
-            if (types[i+1]==STR_FILE && paths[i+1][0] == '\0') {
-                stdout_used = 1;
-                break;
-            }
+        if (rtcmdec) {
+            strsvr.rtcmdec = stdout_used ? 2 : 1;
         }
-        strsvr.roti = stdout_used ? 2 : 1;
-    }
-    if (mp) {
-        /* check if stdout is used for binary output stream */
-        int stdout_used = 0;
-        for (i=0; i<n; i++) {
-            if (types[i+1]==STR_FILE && paths[i+1][0] == '\0') {
-                stdout_used = 1;
-                break;
-            }
+        if (roti) {
+            strsvr.roti = stdout_used ? 2 : 1;
         }
-        strsvr.mp = stdout_used ? 2 : 1;
+        if (mp) {
+            strsvr.mp = stdout_used ? 2 : 1;
+        }
+        /* set RTCM decode format for any decode-based feature */
+        if (rtcmdec || roti || mp) {
+            strsvr.rtcmdec_fmt = (fmts[0] == STRFMT_RTCM2) ? STRFMT_RTCM2 : STRFMT_RTCM3;
+        }
     }
     strsvr.rpt_interval = rptint;
     /* start stream server */
