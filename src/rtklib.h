@@ -1205,10 +1205,13 @@ typedef struct {        /* stream converter type */
 } strconv_t;
 
 typedef struct {
-    gtime_t time[300];  /* past epoch times */
-    double tec[300];    /* past STEC values */
-    int n;              /* number of active points in window */
-    int head;           /* circular buffer head index */
+    gtime_t last_time;  /* time of last valid epoch */
+    gtime_t start_time; /* time of arc start (after last slip/reset) */
+    double  last_tec;   /* TEC at last epoch (for ROT computation) */
+    int     n;          /* number of ROT samples in current arc */
+    double  mean_rot;   /* Welford running mean of ROT (TECU/min) */
+    double  M2_rot;     /* Welford running sum of squared deviations */
+    int     valid;      /* 1 if last_time/last_tec are initialised */
 } roti_sat_t;
 
 typedef struct {

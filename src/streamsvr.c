@@ -418,28 +418,24 @@ static void write_sta_cycle(stream_t *str, strconv_t *conv)
         strwrite(str,conv->out.buff,conv->out.nbyte);
     }
 }
-/* update ROTI (Rate of TEC Index) -------------------------------------------*/
+/* update ROTI (Rate of TEC Index) using Welford online variance ---------------*/
 static void update_roti(strsvr_t *svr, const obs_t *obs, const nav_t *nav)
 {
-    gtime_t time;
     double c=299792458.0;
-    double f1,f2,lam1,lam2,phi_gf,tec,dt;
-    int i,j,f,sat,sys,prn,idx,f1_idx,f2_idx;
-    char sat_id[32];
-    char out_str[4096]="";
-    char *p=out_str;
+    double f1,f2,lam1,lam2,phi_gf,tec,dt,rot,delta,delta2;
+    int i,f,sat,prn,idx,f1_idx,f2_idx,slip;
     
     if (obs->n<=0) return;
-    time=obs->data[0].time;
     
     for (i=0;i<obs->n;i++) {
         sat=obs->data[i].sat;
-        sys=satsys(sat,&prn);
+        satsys(sat,&prn);
         
+        /* find first two valid carrier-phase frequencies */
         f1_idx=-1; f2_idx=-1;
         for (f=0;f<NFREQ;f++) {
             if (obs->data[i].L[f]!=0.0&&obs->data[i].code[f]!=CODE_NONE) {
-                if (f1_idx==-1) f1_idx=f;
+                if      (f1_idx==-1) f1_idx=f;
                 else if (f2_idx==-1) { f2_idx=f; break; }
             }
         }
@@ -449,75 +445,44 @@ static void update_roti(strsvr_t *svr, const obs_t *obs, const nav_t *nav)
         f2=sat2freq(sat,obs->data[i].code[f2_idx],nav);
         if (f1<=0.0||f2<=0.0) continue;
         
-        lam1=c/f1;
-        lam2=c/f2;
-        
+        lam1=c/f1; lam2=c/f2;
         phi_gf=lam1*obs->data[i].L[f1_idx]-lam2*obs->data[i].L[f2_idx];
-        
         tec=phi_gf/(40.3e16*(1.0/(f2*f2)-1.0/(f1*f1)));
         
         idx=sat-1;
         if (idx<0||idx>=MAXSAT) continue;
         roti_sat_t *rs=&svr->roti_sat[idx];
         
-        /* cycle slip check */
-        if ((obs->data[i].LLI[f1_idx]&1)||(obs->data[i].LLI[f2_idx]&1)) {
-            rs->n=0;
-        }
-        else if (rs->n>0) {
-            int last_idx=(rs->head+rs->n-1)%300;
-            if (fabs(tec-rs->tec[last_idx])>5.0) {
-                rs->n=0;
-            }
-        }
+        /* detect cycle slip or large TEC jump */
+        slip=(obs->data[i].LLI[f1_idx]&1)||(obs->data[i].LLI[f2_idx]&1);
+        if (!slip&&rs->valid&&fabs(tec-rs->last_tec)>5.0) slip=1;
         
-        /* add to circular buffer */
-        int next_idx=(rs->head+rs->n)%300;
-        rs->time[next_idx]=obs->data[i].time;
-        rs->tec[next_idx]=tec;
-        if (rs->n<300) {
-            rs->n++;
+        if (slip||!rs->valid) {
+            /* reset arc accumulator */
+            rs->n=0; rs->mean_rot=0.0; rs->M2_rot=0.0;
+            rs->start_time=obs->data[i].time;
         }
         else {
-            rs->head=(rs->head+1)%300;
-        }
-        
-        /* remove points older than 5 minutes */
-        while (rs->n>0) {
-            dt=timediff(obs->data[i].time,rs->time[rs->head]);
-            if (dt>300.0) {
-                rs->head=(rs->head+1)%300;
-                rs->n--;
+            dt=timediff(obs->data[i].time,rs->last_time);
+            if (dt>0.0&&dt<=60.0) {
+                /* compute Rate of TEC (TECU/min) */
+                rot=(tec-rs->last_tec)/dt*60.0;
+                /* Welford online update: O(1), numerically stable */
+                rs->n++;
+                delta=rot-rs->mean_rot;
+                rs->mean_rot+=delta/rs->n;
+                delta2=rot-rs->mean_rot;
+                rs->M2_rot+=delta*delta2;
             }
-            else {
-                break;
-            }
-        }
-        
-        /* compute ROTI if we have enough points */
-        if (rs->n>=10) {
-            double sum_rot=0.0,sum_rot2=0.0;
-            int count=0;
-            for (j=0;j<rs->n-1;j++) {
-                int idx1=(rs->head+j)%300;
-                int idx2=(rs->head+j+1)%300;
-                double t_diff=timediff(rs->time[idx2],rs->time[idx1]);
-                if (t_diff>0.0&&t_diff<60.0) {
-                    double rot=(rs->tec[idx2]-rs->tec[idx1])/t_diff*60.0; /* TECU/min */
-                    sum_rot+=rot;
-                    sum_rot2+=rot*rot;
-                    count++;
-                }
-            }
-            if (count>=9) {
-                double mean_rot=sum_rot/count;
-                double var_rot=sum_rot2/count-mean_rot*mean_rot;
-                double roti=var_rot>0.0?sqrt(var_rot):0.0;
-                
-                satno2id(sat,sat_id);
-                p+=sprintf(p," %s=%.2f",sat_id,roti);
+            else if (dt>60.0) {
+                /* gap too large — restart arc without a slip penalty */
+                rs->n=0; rs->mean_rot=0.0; rs->M2_rot=0.0;
+                rs->start_time=obs->data[i].time;
             }
         }
+        rs->last_tec=tec;
+        rs->last_time=obs->data[i].time;
+        rs->valid=1;
     }
 }
 
@@ -634,7 +599,7 @@ static void update_mp(strsvr_t *svr, const obs_t *obs, const nav_t *nav)
 /* print periodic ROTI report ------------------------------------------------*/
 extern void print_roti_report(strsvr_t *svr)
 {
-    int i,j,sat,sys,prn;
+    int i,sat,sys,prn;
     char sat_id[32];
     const char *sys_names[]={"GPS","GLO","GAL","BDS","QZS","SBS"};
     int sys_map[]={SYS_GPS,SYS_GLO,SYS_GAL,SYS_CMP,SYS_QZS,SYS_SBS};
@@ -645,8 +610,8 @@ extern void print_roti_report(strsvr_t *svr)
     time2str(utc2gpst(now),tstr,0);
     
     p+=sprintf(p,"\n=== ROTI Report [%s] ===\n",tstr);
-    p+=sprintf(p,"%-6s  %5s  ROTI(TECU/min)  Window\n","PRN","Sys");
-    p+=sprintf(p,"------  -----  -------------  ------\n");
+    p+=sprintf(p,"%-6s  %-5s  ROTI(TECU/min)  Samples  Arc\n","PRN","Sys");
+    p+=sprintf(p,"------  -----  -------------  -------  ---\n");
     
     for (sys=0;sys<4;sys++) {
         double sum_roti=0.0;
@@ -656,32 +621,16 @@ extern void print_roti_report(strsvr_t *svr)
             sat=i+1;
             if (satsys(sat,&prn)!=sys_map[sys]) continue;
             roti_sat_t *rs=&svr->roti_sat[i];
-            if (rs->n<10) continue;
+            /* need at least 10 ROT samples for a stable estimate */
+            if (!rs->valid||rs->n<10) continue;
             
-            /* compute ROTI for this satellite */
-            double sum_rot=0.0,sum_rot2=0.0;
-            int cnt=0;
-            for (j=0;j<rs->n-1;j++) {
-                int idx1=(rs->head+j)%300;
-                int idx2=(rs->head+j+1)%300;
-                double t_diff=timediff(rs->time[idx2],rs->time[idx1]);
-                if (t_diff>0.0&&t_diff<60.0) {
-                    double rot=(rs->tec[idx2]-rs->tec[idx1])/t_diff*60.0;
-                    sum_rot+=rot;
-                    sum_rot2+=rot*rot;
-                    cnt++;
-                }
-            }
-            if (cnt<9) continue;
-            double mean_rot=sum_rot/cnt;
-            double var_rot=sum_rot2/cnt-mean_rot*mean_rot;
-            double roti=var_rot>0.0?sqrt(var_rot):0.0;
-            
-            /* time window covered */
-            double window=rs->n>1 ? timediff(rs->time[(rs->head+rs->n-1)%300],rs->time[rs->head]) : 0.0;
+            /* ROTI = population std-dev of ROT = sqrt(M2/n) */
+            double roti=rs->M2_rot>0.0 ? sqrt(rs->M2_rot/rs->n) : 0.0;
+            double arc=timediff(rs->last_time,rs->start_time);
             
             satno2id(sat,sat_id);
-            p+=sprintf(p,"%-6s  %-5s  %13.3f  %4.0fs\n",sat_id,sys_names[sys],roti,window);
+            p+=sprintf(p,"%-6s  %-5s  %13.3f  %7d  %4.0fs\n",
+                       sat_id,sys_names[sys],roti,rs->n,(arc>0.0?arc:0.0));
             sum_roti+=roti;
             count++;
         }
