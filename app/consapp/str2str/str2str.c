@@ -111,6 +111,7 @@ static const char *help[]={
 " -b  str_no        relay back messages from output str to input str [no]",
 " -dec              show rtcm decode info [no]",
 " -roti             compute ROTI in real-time and output stats [no]",
+" -mp               compute MP12/MP21 and output stats [no]",
 " -t  level         trace level [0]",
 " -fl file          log file [str2str.trace]",
 " -h                print help",
@@ -217,7 +218,7 @@ int main(int argc, char **argv)
     char *ant[]={"","",""},*rcv[]={"","",""},*logfile="";
     int i,j,n=0,dispint=5000,trlevel=0,opts[]={10000,10000,2000,32768,10,0,30,0};
     int types[MAXSTR]={STR_FILE,STR_FILE},stat[MAXSTR]={0},log_stat[MAXSTR]={0};
-    int byte[MAXSTR]={0},bps[MAXSTR]={0},fmts[MAXSTR]={0},sta=0,rtcmdec=0,roti=0;
+    int byte[MAXSTR]={0},bps[MAXSTR]={0},fmts[MAXSTR]={0},sta=0,rtcmdec=0,roti=0,mp=0;
     
     for (i=0;i<MAXSTR;i++) {
         paths[i]=s1[i];
@@ -270,6 +271,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i],"-fl" )&&i+1<argc) logfile=argv[++i];
         else if (!strcmp(argv[i],"-dec" )) rtcmdec=1;
         else if (!strcmp(argv[i],"-roti")) roti=1;
+        else if (!strcmp(argv[i],"-mp"  )) mp=1;
         else if (!strcmp(argv[i],"-t"  )&&i+1<argc) trlevel=atoi(argv[++i]);
         else if (*argv[i]=='-') printhelp();
     }
@@ -346,6 +348,17 @@ int main(int argc, char **argv)
             }
         }
         strsvr.roti = stdout_used ? 2 : 1;
+    }
+    if (mp) {
+        /* check if stdout is used for binary output stream */
+        int stdout_used = 0;
+        for (i=0; i<n; i++) {
+            if (types[i+1]==STR_FILE && paths[i+1][0] == '\0') {
+                stdout_used = 1;
+                break;
+            }
+        }
+        strsvr.mp = stdout_used ? 2 : 1;
     }
     /* start stream server */
     if (!strsvrstart(&strsvr,opts,types,paths,logs,conv,cmds,cmds_periodic,

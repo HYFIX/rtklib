@@ -1211,6 +1211,15 @@ typedef struct {
     int head;           /* circular buffer head index */
 } roti_sat_t;
 
+typedef struct {
+    int n;              /* sample count in current arc */
+    double sum_mp12;    /* sum of MP12 */
+    double sum2_mp12;   /* sum of MP12^2 */
+    double sum_mp21;    /* sum of MP21 */
+    double sum2_mp21;   /* sum of MP21^2 */
+    double last_tec;    /* last TEC value for slip check */
+} mp_sat_t;
+
 typedef struct {        /* stream server type */
     int state;          /* server state (0:stop,1:running) */
     int cycle;          /* server cycle (ms) */
@@ -1233,6 +1242,8 @@ typedef struct {        /* stream server type */
     int rtcmdec_fmt;    /* RTCM decode format (STRFMT_RTCM2 or STRFMT_RTCM3) */
     int roti;           /* show ROTI stats (0:no, 1:stdout, 2:stderr) */
     roti_sat_t roti_sat[MAXSAT]; /* roti satellite states */
+    int mp;             /* show multipath stats (0:no, 1:stdout, 2:stderr) */
+    mp_sat_t mp_sat[MAXSAT]; /* multipath satellite states */
     rtcm_t rtcm;        /* rtcm decode struct */
 } strsvr_t;
 

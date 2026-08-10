@@ -526,6 +526,114 @@ static void update_roti(strsvr_t *svr, const obs_t *obs, const nav_t *nav)
     }
 }
 
+/* update pseudorange multipath stats (MP12/MP21) based on TEQC method -------*/
+static void update_mp(strsvr_t *svr, const obs_t *obs, const nav_t *nav)
+{
+    gtime_t time;
+    double c=299792458.0;
+    double f1,f2,lam1,lam2,alpha,phi1,phi2,p1,p2,mp12,mp21,tec;
+    int i,sat,sys,prn,idx;
+    char sat_id[32];
+    char out_str1[4096]="";
+    char out_str2[4096]="";
+    char *p1_str=out_str1;
+    char *p2_str=out_str2;
+    
+    if (obs->n<=0) return;
+    time=obs->data[0].time;
+    
+    for (i=0;i<obs->n;i++) {
+        sat=obs->data[i].sat;
+        sys=satsys(sat,&prn);
+        
+        f1=sat2freq(sat,obs->data[i].code[0],nav);
+        f2=sat2freq(sat,obs->data[i].code[1],nav);
+        if (f1<=0.0||f2<=0.0) continue;
+        
+        if (obs->data[i].L[0]==0.0||obs->data[i].L[1]==0.0) continue;
+        if (obs->data[i].P[0]==0.0||obs->data[i].P[1]==0.0) continue;
+        
+        lam1=c/f1;
+        lam2=c/f2;
+        alpha=(f1*f1)/(f2*f2);
+        
+        phi1=lam1*obs->data[i].L[0];
+        phi2=lam2*obs->data[i].L[1];
+        p1=obs->data[i].P[0];
+        p2=obs->data[i].P[1];
+        
+        /* MP12 and MP21 formulas based on TEQC */
+        mp12=p1-(1.0+2.0/(alpha-1.0))*phi1+(2.0/(alpha-1.0))*phi2;
+        mp21=p2-(2.0*alpha/(alpha-1.0))*phi1+(2.0*alpha/(alpha-1.0)-1.0)*phi2;
+        
+        /* TEC for sudden jump check */
+        tec=(phi1-phi2)/(40.3e16*(1.0/(f2*f2)-1.0/(f1*f1)));
+        
+        idx=sat-1;
+        if (idx<0||idx>=MAXSAT) continue;
+        mp_sat_t *ms=&svr->mp_sat[idx];
+        
+        /* cycle slip check */
+        if ((obs->data[i].LLI[0]&1)||(obs->data[i].LLI[1]&1)) {
+            ms->n=0;
+        }
+        else if (ms->n>0) {
+            if (fabs(tec-ms->last_tec)>5.0) {
+                ms->n=0;
+            }
+        }
+        
+        if (ms->n==0) {
+            ms->sum_mp12=ms->sum2_mp12=0.0;
+            ms->sum_mp21=ms->sum2_mp21=0.0;
+        }
+        
+        ms->last_tec=tec;
+        
+        /* update stats */
+        ms->n++;
+        ms->sum_mp12+=mp12;
+        ms->sum2_mp12+=mp12*mp12;
+        ms->sum_mp21+=mp21;
+        ms->sum2_mp21+=mp21*mp21;
+        
+        if (ms->n>=10) {
+            double mean12=ms->sum_mp12/ms->n;
+            double var12=ms->sum2_mp12/ms->n-mean12*mean12;
+            double rms12=var12>0.0?sqrt(var12):0.0;
+            
+            double mean21=ms->sum_mp21/ms->n;
+            double var21=ms->sum2_mp21/ms->n-mean21*mean21;
+            double rms21=var21>0.0?sqrt(var21):0.0;
+            
+            satno2id(sat,sat_id);
+            p1_str+=sprintf(p1_str," %s=%.2f",sat_id,rms12);
+            p2_str+=sprintf(p2_str," %s=%.2f",sat_id,rms21);
+        }
+    }
+    
+    char tstr[32];
+    time2str(time,tstr,1);
+    if (p1_str>out_str1) {
+        if (svr->mp==1) {
+            printf("%s MP12:%s\n",tstr,out_str1);
+            fflush(stdout);
+        }
+        else if (svr->mp==2) {
+            fprintf(stderr,"%s MP12:%s\n",tstr,out_str1);
+        }
+    }
+    if (p2_str>out_str2) {
+        if (svr->mp==1) {
+            printf("%s MP21:%s\n",tstr,out_str2);
+            fflush(stdout);
+        }
+        else if (svr->mp==2) {
+            fprintf(stderr,"%s MP21:%s\n",tstr,out_str2);
+        }
+    }
+}
+
 /* convert stearm ------------------------------------------------------------*/
 static void strconv(strsvr_t *svr, stream_t *str, strconv_t *conv, uint8_t *buff, int n)
 {
@@ -554,6 +662,9 @@ static void strconv(strsvr_t *svr, stream_t *str, strconv_t *conv, uint8_t *buff
                 write_obs(conv->out.time,str,conv);
                 if (svr->roti) {
                     update_roti(svr,&conv->out.obs,&conv->out.nav);
+                }
+                if (svr->mp) {
+                    update_mp(svr,&conv->out.obs,&conv->out.nav);
                 }
                 break;
             case 2: write_nav(conv->out.time,str,conv); break;
@@ -717,7 +828,9 @@ extern void strsvrinit(strsvr_t *svr, int nout)
     svr->rtcmdec=0;
     svr->rtcmdec_fmt=0;
     svr->roti=0;
+    svr->mp=0;
     memset(svr->roti_sat,0,sizeof(svr->roti_sat));
+    memset(svr->mp_sat,0,sizeof(svr->mp_sat));
     memset(&svr->rtcm,0,sizeof(rtcm_t));
     initlock(&svr->lock);
 }
