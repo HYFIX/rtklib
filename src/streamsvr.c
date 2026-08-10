@@ -519,18 +519,6 @@ static void update_roti(strsvr_t *svr, const obs_t *obs, const nav_t *nav)
             }
         }
     }
-    
-    if (p>out_str) {
-        char tstr[32];
-        time2str(time,tstr,1);
-        if (svr->roti==1) {
-            printf("%s ROTI:%s\n",tstr,out_str);
-            fflush(stdout);
-        }
-        else if (svr->roti==2) {
-            fprintf(stderr,"%s ROTI:%s\n",tstr,out_str);
-        }
-    }
 }
 
 /* update pseudorange multipath stats (MP12/MP21) based on TEQC method -------*/
@@ -641,26 +629,163 @@ static void update_mp(strsvr_t *svr, const obs_t *obs, const nav_t *nav)
             p2_str+=sprintf(p2_str," %s=%.2f",sat_id,rms21);
         }
     }
+}
+
+/* print periodic ROTI report ------------------------------------------------*/
+extern void print_roti_report(strsvr_t *svr)
+{
+    int i,j,sat,sys,prn;
+    char sat_id[32];
+    const char *sys_names[]={"GPS","GLO","GAL","BDS","QZS","SBS"};
+    int sys_map[]={SYS_GPS,SYS_GLO,SYS_GAL,SYS_CMP,SYS_QZS,SYS_SBS};
+    char out_buf[16384]="";
+    char *p=out_buf;
+    char tstr[40];
+    gtime_t now=timeget();
+    time2str(utc2gpst(now),tstr,0);
     
-    char tstr[32];
-    time2str(time,tstr,1);
-    if (p1_str>out_str1) {
-        if (svr->mp==1) {
-            printf("%s MP12:%s\n",tstr,out_str1);
-            fflush(stdout);
+    p+=sprintf(p,"\n=== ROTI Report [%s] ===\n",tstr);
+    p+=sprintf(p,"%-6s  %5s  ROTI(TECU/min)  Window\n","PRN","Sys");
+    p+=sprintf(p,"------  -----  -------------  ------\n");
+    
+    for (sys=0;sys<4;sys++) {
+        double sum_roti=0.0;
+        int count=0;
+        
+        for (i=0;i<MAXSAT;i++) {
+            sat=i+1;
+            if (satsys(sat,&prn)!=sys_map[sys]) continue;
+            roti_sat_t *rs=&svr->roti_sat[i];
+            if (rs->n<10) continue;
+            
+            /* compute ROTI for this satellite */
+            double sum_rot=0.0,sum_rot2=0.0;
+            int cnt=0;
+            for (j=0;j<rs->n-1;j++) {
+                int idx1=(rs->head+j)%300;
+                int idx2=(rs->head+j+1)%300;
+                double t_diff=timediff(rs->time[idx2],rs->time[idx1]);
+                if (t_diff>0.0&&t_diff<60.0) {
+                    double rot=(rs->tec[idx2]-rs->tec[idx1])/t_diff*60.0;
+                    sum_rot+=rot;
+                    sum_rot2+=rot*rot;
+                    cnt++;
+                }
+            }
+            if (cnt<9) continue;
+            double mean_rot=sum_rot/cnt;
+            double var_rot=sum_rot2/cnt-mean_rot*mean_rot;
+            double roti=var_rot>0.0?sqrt(var_rot):0.0;
+            
+            /* time window covered */
+            double window=rs->n>1 ? timediff(rs->time[(rs->head+rs->n-1)%300],rs->time[rs->head]) : 0.0;
+            
+            satno2id(sat,sat_id);
+            p+=sprintf(p,"%-6s  %-5s  %13.3f  %4.0fs\n",sat_id,sys_names[sys],roti,window);
+            sum_roti+=roti;
+            count++;
         }
-        else if (svr->mp==2) {
-            fprintf(stderr,"%s MP12:%s\n",tstr,out_str1);
+        if (count>0) {
+            p+=sprintf(p,"  --> %-3s avg ROTI: %.3f TECU/min (%d sats)\n",
+                       sys_names[sys],sum_roti/count,count);
         }
     }
-    if (p2_str>out_str2) {
-        if (svr->mp==1) {
-            printf("%s MP21:%s\n",tstr,out_str2);
-            fflush(stdout);
+    p+=sprintf(p,"\n");
+    
+    if (svr->roti==1) {
+        printf("%s",out_buf);
+        fflush(stdout);
+    }
+    else if (svr->roti==2) {
+        fprintf(stderr,"%s",out_buf);
+    }
+}
+
+/* print periodic MP report (non-destructive, uses snapshot of current state) */
+extern void print_mp_report(strsvr_t *svr)
+{
+    int i,sat,sys,prn;
+    const char *sys_names[]={"GPS","GLO","GAL","BDS","QZS","SBS"};
+    int sys_map[]={SYS_GPS,SYS_GLO,SYS_GAL,SYS_CMP,SYS_QZS,SYS_SBS};
+    char out_buf[32768]="";
+    char *p=out_buf;
+    char tstr[40],sig1_str[8],sig2_str[8];
+    gtime_t now=timeget();
+    time2str(utc2gpst(now),tstr,0);
+    
+    p+=sprintf(p,"\n=== MP Report [%s] ===\n",tstr);
+    p+=sprintf(p,"Sys Sig1 Sig2  PRN   MP1(m)   MP2(m)  IOD_CS  MP1_CS  MP2_CS  ValidObs  O/Slips\n");
+    p+=sprintf(p,"--- ---- ----  ---  --------  --------  ------  ------  ------  --------  -------\n");
+    
+    for (sys=0;sys<4;sys++) {
+        int has_obs=0;
+        int tot_n_valid=0,tot_iod_cs=0,tot_mp1_cs=0,tot_mp2_cs=0,tot_n_accum=0;
+        double tot_accum_mp12=0.0,tot_accum_mp21=0.0;
+        uint8_t last_code1=0,last_code2=0;
+        
+        for (i=0;i<MAXSAT;i++) {
+            sat=i+1;
+            if (satsys(sat,&prn)!=sys_map[sys]) continue;
+            mp_sat_t *ms=&svr->mp_sat[i];
+            if (ms->n_valid<=0) continue;
+            has_obs=1;
+            
+            /* snapshot: include current open arc without committing */
+            double snap_accum12=ms->accum_mp12;
+            double snap_accum21=ms->accum_mp21;
+            int snap_total_n=ms->total_n;
+            if (ms->n>=2) {
+                snap_accum12+=(ms->sum2_mp12-ms->sum_mp12*ms->sum_mp12/ms->n);
+                snap_accum21+=(ms->sum2_mp21-ms->sum_mp21*ms->sum_mp21/ms->n);
+                snap_total_n+=ms->n;
+            }
+            
+            double rms12=snap_total_n>0 ? sqrt(snap_accum12/snap_total_n) : 0.0;
+            double rms21=snap_total_n>0 ? sqrt(snap_accum21/snap_total_n) : 0.0;
+            int sat_cs=ms->iod_cs+ms->mp1_cs+ms->mp2_cs;
+            double o_slips=sat_cs>0 ? (double)ms->n_valid/sat_cs : (double)ms->n_valid;
+            
+            strcpy(sig1_str,code2obs(ms->code1));
+            strcpy(sig2_str,code2obs(ms->code2));
+            
+            p+=sprintf(p,"%-3s %-4s %-4s  %03d  %8.4f  %8.4f  %6d  %6d  %6d  %8d  %7.1f\n",
+                       sys_names[sys],sig1_str,sig2_str,prn,
+                       rms12,rms21,
+                       ms->iod_cs,ms->mp1_cs,ms->mp2_cs,
+                       ms->n_valid,o_slips);
+            
+            tot_n_valid+=ms->n_valid;
+            tot_iod_cs+=ms->iod_cs;
+            tot_mp1_cs+=ms->mp1_cs;
+            tot_mp2_cs+=ms->mp2_cs;
+            tot_accum_mp12+=snap_accum12;
+            tot_accum_mp21+=snap_accum21;
+            tot_n_accum+=snap_total_n;
+            if (ms->code1>0) last_code1=ms->code1;
+            if (ms->code2>0) last_code2=ms->code2;
         }
-        else if (svr->mp==2) {
-            fprintf(stderr,"%s MP21:%s\n",tstr,out_str2);
-        }
+        if (!has_obs) continue;
+        
+        double rms12_c=tot_n_accum>0 ? sqrt(tot_accum_mp12/tot_n_accum) : 0.0;
+        double rms21_c=tot_n_accum>0 ? sqrt(tot_accum_mp21/tot_n_accum) : 0.0;
+        int tot_cs=tot_iod_cs+tot_mp1_cs+tot_mp2_cs;
+        double o_slips_c=tot_cs>0 ? (double)tot_n_valid/tot_cs : (double)tot_n_valid;
+        strcpy(sig1_str,code2obs(last_code1));
+        strcpy(sig2_str,code2obs(last_code2));
+        p+=sprintf(p,"--- ---- ----  ---  --------  --------  ------  ------  ------  --------  -------\n");
+        p+=sprintf(p,"%-3s %-4s %-4s  AVG  %8.4f  %8.4f  %6d  %6d  %6d  %8d  %7.1f\n\n",
+                   sys_names[sys],sig1_str,sig2_str,
+                   rms12_c,rms21_c,
+                   tot_iod_cs,tot_mp1_cs,tot_mp2_cs,
+                   tot_n_valid,o_slips_c);
+    }
+    
+    if (svr->mp==1) {
+        printf("%s",out_buf);
+        fflush(stdout);
+    }
+    else if (svr->mp==2) {
+        fprintf(stderr,"%s",out_buf);
     }
 }
 
@@ -818,6 +943,16 @@ static void *strsvrthread(void *arg)
             strsendnmea(svr->stream,&sol_nmea);
             tick_nmea=tick;
         }
+        /* periodic ROTI/MP reports */
+        if (svr->rpt_interval>0) {
+            uint32_t now_tick=tickget();
+            if (svr->last_rpt_tick==0) svr->last_rpt_tick=now_tick;
+            if ((int)(now_tick-svr->last_rpt_tick)>=(int)(svr->rpt_interval*1000)) {
+                if (svr->roti) print_roti_report(svr);
+                if (svr->mp)   print_mp_report(svr);
+                svr->last_rpt_tick=now_tick;
+            }
+        }
         sleepms(svr->cycle-(int)(tickget()-tick));
     }
     for (i=0;i<svr->nstr;i++) strclose(svr->stream+i);
@@ -859,6 +994,8 @@ extern void strsvrinit(strsvr_t *svr, int nout)
     svr->rtcmdec_fmt=0;
     svr->roti=0;
     svr->mp=0;
+    svr->rpt_interval=60;
+    svr->last_rpt_tick=0;
     memset(svr->roti_sat,0,sizeof(svr->roti_sat));
     memset(svr->mp_sat,0,sizeof(svr->mp_sat));
     memset(&svr->rtcm,0,sizeof(rtcm_t));

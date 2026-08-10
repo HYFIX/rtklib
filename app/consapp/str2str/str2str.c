@@ -112,6 +112,7 @@ static const char *help[]={
 " -dec              show rtcm decode info [no]",
 " -roti             compute ROTI in real-time and output stats [no]",
 " -mp               compute MP12/MP21 and output stats [no]",
+" -rptint sec       periodic ROTI/MP report interval in seconds [60]",
 " -dur sec          run for a specified duration in seconds [no limit]",
 " -t  level         trace level [0]",
 " -fl file          log file [str2str.trace]",
@@ -219,7 +220,7 @@ int main(int argc, char **argv)
     char *ant[]={"","",""},*rcv[]={"","",""},*logfile="";
     int i,j,n=0,dispint=5000,trlevel=0,opts[]={10000,10000,2000,32768,10,0,30,0};
     int types[MAXSTR]={STR_FILE,STR_FILE},stat[MAXSTR]={0},log_stat[MAXSTR]={0};
-    int byte[MAXSTR]={0},bps[MAXSTR]={0},fmts[MAXSTR]={0},sta=0,rtcmdec=0,roti=0,mp=0,duration=0;
+    int byte[MAXSTR]={0},bps[MAXSTR]={0},fmts[MAXSTR]={0},sta=0,rtcmdec=0,roti=0,mp=0,duration=0,rptint=60;
     
     for (i=0;i<MAXSTR;i++) {
         paths[i]=s1[i];
@@ -273,6 +274,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i],"-dec" )) rtcmdec=1;
         else if (!strcmp(argv[i],"-roti")) roti=1;
         else if (!strcmp(argv[i],"-mp"  )) mp=1;
+        else if (!strcmp(argv[i],"-rptint")&&i+1<argc) rptint=atoi(argv[++i]);
         else if (!strcmp(argv[i],"-dur" )&&i+1<argc) duration=atoi(argv[++i]);
         else if (!strcmp(argv[i],"-t"  )&&i+1<argc) trlevel=atoi(argv[++i]);
         else if (*argv[i]=='-') printhelp();
@@ -362,6 +364,7 @@ int main(int argc, char **argv)
         }
         strsvr.mp = stdout_used ? 2 : 1;
     }
+    strsvr.rpt_interval = rptint;
     /* start stream server */
     if (!strsvrstart(&strsvr,opts,types,paths,logs,conv,cmds,cmds_periodic,
                      stapos)) {

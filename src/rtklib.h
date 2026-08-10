@@ -1254,6 +1254,8 @@ typedef struct {        /* stream server type */
     int mp;             /* show multipath stats (0:no, 1:stdout, 2:stderr) */
     mp_sat_t mp_sat[MAXSAT]; /* multipath satellite states */
     rtcm_t rtcm;        /* rtcm decode struct */
+    int rpt_interval;   /* periodic report interval (s, 0:no periodic) */
+    uint32_t last_rpt_tick; /* tick at last periodic report */
 } strsvr_t;
 
 typedef struct {        /* RTK server type */
@@ -1785,6 +1787,9 @@ EXPORT void strsvrstop (strsvr_t *svr, char **cmds);
 EXPORT void strsvrstat (strsvr_t *svr, int *stat, int *log_stat, int *byte,
                         int *bps, char *msg);
 EXPORT void print_teqc_summary(strsvr_t *svr);
+EXPORT void print_roti_report(strsvr_t *svr);
+EXPORT void print_mp_report(strsvr_t *svr);
+
 EXPORT strconv_t *strconvnew(int itype, int otype, const char *msgs, int staid,
                              int stasel, const char *opt);
 EXPORT void strconvfree(strconv_t *conv);
