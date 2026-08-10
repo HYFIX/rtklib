@@ -8,6 +8,30 @@ The development branch for RTKLIB 2.4.3.
 
 UPDATE HISTORY
 
+2026/08/10  HYFIX fork  str2str QC extensions:
+                        add -dec option to str2str to display RTCM2/RTCM3 packet
+                          decode info in real-time (routes to stderr when stdout
+                          is used for binary relay output)
+                        add -roti option to str2str to compute Rate of TEC Index
+                          (ROTI, TECU/min) per satellite using geometry-free carrier
+                          phase combination with 5-minute sliding window
+                        add -mp option to str2str to compute TEQC-style pseudorange
+                          multipath (MP1/MP2, metres) per satellite using arc-level
+                          mean removal; prints TEQC QC summary table on exit
+                        add -rptint <sec> option (default 60s) for periodic ROTI
+                          and MP report tables in structured human-readable format
+                        add -dur <sec> option to run str2str for a fixed duration
+                          then exit cleanly and print the final TEQC summary
+                        fix: RTCM byte-level decode activated in strsvrthread for
+                          ROTI/MP when no format converter is configured (pure relay)
+                        fix: dynamic dual-frequency carrier selection in update_roti
+                          and update_mp; scans all NFREQ slots rather than assuming
+                          L1=index-0 / L2=index-1 (supports L1/L5 receivers)
+                        add multi-step and partial AR ambiguity resolution options
+                          to rtkrcv with BIE ambiguity estimator (default)
+                        add EKF state feedback guard: updates main filter only after
+                          full validation of final resolution step
+
 2014/09/07  2.4.3 b1  add 3-panel and veritical-panel modes for RTKNAVI
                       add sky image overlay to skyplot for RTKPLOT
                       fix invalid identification of obs type "C2" (#113)
