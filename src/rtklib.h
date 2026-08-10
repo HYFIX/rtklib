@@ -1204,6 +1204,13 @@ typedef struct {        /* stream converter type */
     rtcm_t out;         /* rtcm output data buffer */
 } strconv_t;
 
+typedef struct {
+    gtime_t time[300];  /* past epoch times */
+    double tec[300];    /* past STEC values */
+    int n;              /* number of active points in window */
+    int head;           /* circular buffer head index */
+} roti_sat_t;
+
 typedef struct {        /* stream server type */
     int state;          /* server state (0:stop,1:running) */
     int cycle;          /* server cycle (ms) */
@@ -1224,6 +1231,8 @@ typedef struct {        /* stream server type */
     lock_t lock;        /* lock flag */
     int rtcmdec;        /* show rtcm decode info (0:no, 1:stdout, 2:stderr) */
     int rtcmdec_fmt;    /* RTCM decode format (STRFMT_RTCM2 or STRFMT_RTCM3) */
+    int roti;           /* show ROTI stats (0:no, 1:stdout, 2:stderr) */
+    roti_sat_t roti_sat[MAXSAT]; /* roti satellite states */
     rtcm_t rtcm;        /* rtcm decode struct */
 } strsvr_t;
 

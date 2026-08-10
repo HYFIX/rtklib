@@ -418,8 +418,116 @@ static void write_sta_cycle(stream_t *str, strconv_t *conv)
         strwrite(str,conv->out.buff,conv->out.nbyte);
     }
 }
+/* update ROTI (Rate of TEC Index) -------------------------------------------*/
+static void update_roti(strsvr_t *svr, const obs_t *obs, const nav_t *nav)
+{
+    gtime_t time;
+    double c=299792458.0;
+    double f1,f2,lam1,lam2,phi_gf,tec,dt;
+    int i,j,sat,sys,prn,idx;
+    char sat_id[32];
+    char out_str[4096]="";
+    char *p=out_str;
+    
+    if (obs->n<=0) return;
+    time=obs->data[0].time;
+    
+    for (i=0;i<obs->n;i++) {
+        sat=obs->data[i].sat;
+        sys=satsys(sat,&prn);
+        
+        f1=sat2freq(sat,obs->data[i].code[0],nav);
+        f2=sat2freq(sat,obs->data[i].code[1],nav);
+        if (f1<=0.0||f2<=0.0) continue;
+        
+        if (obs->data[i].L[0]==0.0||obs->data[i].L[1]==0.0) continue;
+        
+        lam1=c/f1;
+        lam2=c/f2;
+        
+        phi_gf=lam1*obs->data[i].L[0]-lam2*obs->data[i].L[1];
+        
+        tec=phi_gf/(40.3e16*(1.0/(f2*f2)-1.0/(f1*f1)));
+        
+        idx=sat-1;
+        if (idx<0||idx>=MAXSAT) continue;
+        roti_sat_t *rs=&svr->roti_sat[idx];
+        
+        /* cycle slip check */
+        if ((obs->data[i].LLI[0]&1)||(obs->data[i].LLI[1]&1)) {
+            rs->n=0;
+        }
+        else if (rs->n>0) {
+            int last_idx=(rs->head+rs->n-1)%300;
+            if (fabs(tec-rs->tec[last_idx])>5.0) {
+                rs->n=0;
+            }
+        }
+        
+        /* add to circular buffer */
+        int next_idx=(rs->head+rs->n)%300;
+        rs->time[next_idx]=obs->data[i].time;
+        rs->tec[next_idx]=tec;
+        if (rs->n<300) {
+            rs->n++;
+        }
+        else {
+            rs->head=(rs->head+1)%300;
+        }
+        
+        /* remove points older than 5 minutes */
+        while (rs->n>0) {
+            dt=timediff(obs->data[i].time,rs->time[rs->head]);
+            if (dt>300.0) {
+                rs->head=(rs->head+1)%300;
+                rs->n--;
+            }
+            else {
+                break;
+            }
+        }
+        
+        /* compute ROTI if we have enough points */
+        if (rs->n>=10) {
+            double sum_rot=0.0,sum_rot2=0.0;
+            int count=0;
+            for (j=0;j<rs->n-1;j++) {
+                int idx1=(rs->head+j)%300;
+                int idx2=(rs->head+j+1)%300;
+                double t_diff=timediff(rs->time[idx2],rs->time[idx1]);
+                if (t_diff>0.0&&t_diff<60.0) {
+                    double rot=(rs->tec[idx2]-rs->tec[idx1])/t_diff*60.0; /* TECU/min */
+                    sum_rot+=rot;
+                    sum_rot2+=rot*rot;
+                    count++;
+                }
+            }
+            if (count>=9) {
+                double mean_rot=sum_rot/count;
+                double var_rot=sum_rot2/count-mean_rot*mean_rot;
+                double roti=var_rot>0.0?sqrt(var_rot):0.0;
+                
+                satno2id(sat,sat_id);
+                p+=sprintf(p," %s=%.2f",sat_id,roti);
+            }
+        }
+    }
+    
+    if (p>out_str) {
+        char tstr[32];
+        time2str(time,tstr,1);
+        if (svr->roti==1) {
+            printf("%s ROTI:%s\n",tstr,out_str);
+            fflush(stdout);
+        }
+        else if (svr->roti==2) {
+            fprintf(stderr,"%s ROTI:%s\n",tstr,out_str);
+        }
+    }
+}
+
 /* convert stearm ------------------------------------------------------------*/
-static void strconv(stream_t *str, strconv_t *conv, uint8_t *buff, int n)
+static void strconv(strsvr_t *svr, stream_t *str, strconv_t *conv, uint8_t *buff, int n)
 {
     int i,ret;
     
@@ -442,7 +550,12 @@ static void strconv(stream_t *str, strconv_t *conv, uint8_t *buff, int n)
         }
         /* write obs and nav data messages to stream */
         switch (ret) {
-            case 1: write_obs(conv->out.time,str,conv); break;
+            case 1:
+                write_obs(conv->out.time,str,conv);
+                if (svr->roti) {
+                    update_roti(svr,&conv->out.obs,&conv->out.nav);
+                }
+                break;
             case 2: write_nav(conv->out.time,str,conv); break;
         }
     }
@@ -524,7 +637,7 @@ static void *strsvrthread(void *arg)
             /* write data to output streams */
             for (i=1;i<svr->nstr;i++) {
                 if (svr->conv[i-1]) {
-                    strconv(svr->stream+i,svr->conv[i-1],svr->buff,n);
+                    strconv(svr,svr->stream+i,svr->conv[i-1],svr->buff,n);
                 }
                 else {
                     strwrite(svr->stream+i,svr->buff,n);
@@ -603,6 +716,8 @@ extern void strsvrinit(strsvr_t *svr, int nout)
     svr->thread=0;
     svr->rtcmdec=0;
     svr->rtcmdec_fmt=0;
+    svr->roti=0;
+    memset(svr->roti_sat,0,sizeof(svr->roti_sat));
     memset(&svr->rtcm,0,sizeof(rtcm_t));
     initlock(&svr->lock);
 }
