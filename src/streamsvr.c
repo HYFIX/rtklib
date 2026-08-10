@@ -532,7 +532,7 @@ static void update_mp(strsvr_t *svr, const obs_t *obs, const nav_t *nav)
     gtime_t time;
     double c=299792458.0;
     double f1,f2,lam1,lam2,alpha,phi1,phi2,p1,p2,mp12,mp21,tec;
-    int i,sat,sys,prn,idx;
+    int i,sat,sys,prn,idx,slip;
     char sat_id[32];
     char out_str1[4096]="";
     char out_str2[4096]="";
@@ -574,21 +574,38 @@ static void update_mp(strsvr_t *svr, const obs_t *obs, const nav_t *nav)
         mp_sat_t *ms=&svr->mp_sat[idx];
         
         /* cycle slip check */
-        if ((obs->data[i].LLI[0]&1)||(obs->data[i].LLI[1]&1)) {
-            ms->n=0;
+        slip=0;
+        if (obs->data[i].LLI[0]&1) {
+            ms->mp1_cs++;
+            slip=1;
         }
-        else if (ms->n>0) {
+        if (obs->data[i].LLI[1]&1) {
+            ms->mp2_cs++;
+            slip=1;
+        }
+        if (ms->n>0) {
             if (fabs(tec-ms->last_tec)>5.0) {
-                ms->n=0;
+                ms->iod_cs++;
+                slip=1;
             }
         }
         
-        if (ms->n==0) {
+        if (slip) {
+            /* commit completed arc before reset */
+            if (ms->n>=2) {
+                ms->accum_mp12+=(ms->sum2_mp12-ms->sum_mp12*ms->sum_mp12/ms->n);
+                ms->accum_mp21+=(ms->sum2_mp21-ms->sum_mp21*ms->sum_mp21/ms->n);
+                ms->total_n+=ms->n;
+            }
+            ms->n=0;
             ms->sum_mp12=ms->sum2_mp12=0.0;
             ms->sum_mp21=ms->sum2_mp21=0.0;
         }
         
         ms->last_tec=tec;
+        ms->n_valid++;
+        ms->code1=obs->data[i].code[0];
+        ms->code2=obs->data[i].code[1];
         
         /* update stats */
         ms->n++;
@@ -1052,5 +1069,104 @@ extern int strsvrpeek(strsvr_t *svr, uint8_t *buff, int nmax)
     svr->npb-=n;
     unlock_(&svr->lock);
     return n;
+}
+
+/* print TEQC-compatible multipath summary table -------------------------------*/
+extern void print_teqc_summary(strsvr_t *svr)
+{
+    int i,sat,sys,prn;
+    int total_n_valid[6]={0};
+    int total_iod_cs[6]={0},total_mp1_cs[6]={0},total_mp2_cs[6]={0};
+    double total_accum_mp12[6]={0.0},total_accum_mp21[6]={0.0};
+    int total_n_accum[6]={0};
+    uint8_t last_code1[6]={0},last_code2[6]={0};
+    const char *sys_names[]={"GPS","GLO","GAL","BDS","QZS","SBS"};
+    int sys_map[]={SYS_GPS,SYS_GLO,SYS_GAL,SYS_CMP,SYS_QZS,SYS_SBS};
+    
+    char out_buf[16384]="";
+    char *p=out_buf;
+    
+    p+=sprintf(p,"\nmultipath estimation (sys,signal1,signal2,prn,MP1[m],MP2[m],# of IOD CS, # of MP1 CS, # of MP2 CS, # of valid obs, o/slips)\n\n");
+    
+    /* first commit the current active arc for all satellites */
+    for (i=0;i<MAXSAT;i++) {
+        mp_sat_t *ms=&svr->mp_sat[i];
+        if (ms->n>=2) {
+            ms->accum_mp12 += (ms->sum2_mp12 - ms->sum_mp12 * ms->sum_mp12 / ms->n);
+            ms->accum_mp21 += (ms->sum2_mp21 - ms->sum_mp21 * ms->sum_mp21 / ms->n);
+            ms->total_n += ms->n;
+            ms->n=0;
+        }
+    }
+    
+    for (sys=0;sys<4;sys++) { /* GPS, GLO, GAL, BDS */
+        int has_obs=0;
+        
+        /* collect constellation level stats */
+        for (i=0;i<MAXSAT;i++) {
+            sat=i+1;
+            if (satsys(sat,&prn)!=sys_map[sys]) continue;
+            mp_sat_t *ms=&svr->mp_sat[i];
+            if (ms->n_valid<=0) continue;
+            
+            has_obs=1;
+            total_n_valid[sys]+=ms->n_valid;
+            total_iod_cs[sys]+=ms->iod_cs;
+            total_mp1_cs[sys]+=ms->mp1_cs;
+            total_mp2_cs[sys]+=ms->mp2_cs;
+            total_accum_mp12[sys]+=ms->accum_mp12;
+            total_accum_mp21[sys]+=ms->accum_mp21;
+            total_n_accum[sys]+=ms->total_n;
+            if (ms->code1>0) last_code1[sys]=ms->code1;
+            if (ms->code2>0) last_code2[sys]=ms->code2;
+        }
+        
+        if (!has_obs) continue;
+        
+        /* print constellation average */
+        double rms12_const = total_n_accum[sys]>0 ? sqrt(total_accum_mp12[sys]/total_n_accum[sys]) : 0.0;
+        double rms21_const = total_n_accum[sys]>0 ? sqrt(total_accum_mp21[sys]/total_n_accum[sys]) : 0.0;
+        int total_cs = total_iod_cs[sys]+total_mp1_cs[sys]+total_mp2_cs[sys];
+        double o_slips_const = total_cs>0 ? (double)total_n_valid[sys]/total_cs : (double)total_n_valid[sys];
+        
+        char sig1_str[8]="",sig2_str[8]="";
+        strcpy(sig1_str,code2obs(last_code1[sys]));
+        strcpy(sig2_str,code2obs(last_code2[sys]));
+        
+        p+=sprintf(p,"%-3s %-2s %-2s    :  %8.6f  %8.6f      %d       %d       %d   %5d   %5.0f\n",
+                   sys_names[sys],sig1_str,sig2_str,rms12_const,rms21_const,
+                   total_iod_cs[sys],total_mp1_cs[sys],total_mp2_cs[sys],
+                   total_n_valid[sys],o_slips_const);
+                   
+        /* print individual satellite stats */
+        for (i=0;i<MAXSAT;i++) {
+            sat=i+1;
+            if (satsys(sat,&prn)!=sys_map[sys]) continue;
+            mp_sat_t *ms=&svr->mp_sat[i];
+            if (ms->n_valid<=0) continue;
+            
+            double rms12 = ms->total_n>0 ? sqrt(ms->accum_mp12/ms->total_n) : 0.0;
+            double rms21 = ms->total_n>0 ? sqrt(ms->accum_mp21/ms->total_n) : 0.0;
+            int sat_cs = ms->iod_cs+ms->mp1_cs+ms->mp2_cs;
+            double o_slips = sat_cs>0 ? (double)ms->n_valid/sat_cs : (double)ms->n_valid;
+            
+            strcpy(sig1_str,code2obs(ms->code1));
+            strcpy(sig2_str,code2obs(ms->code2));
+            
+            p+=sprintf(p,"%-3s %-2s %-2s %03d:  %8.6f  %8.6f      %d       %d       %d   %5d   %5.0f\n",
+                       sys_names[sys],sig1_str,sig2_str,prn,rms12,rms21,
+                       ms->iod_cs,ms->mp1_cs,ms->mp2_cs,
+                       ms->n_valid,o_slips);
+        }
+        p+=sprintf(p,"\n");
+    }
+    
+    if (svr->mp==1) {
+        printf("%s",out_buf);
+        fflush(stdout);
+    }
+    else if (svr->mp==2) {
+        fprintf(stderr,"%s",out_buf);
+    }
 }
 

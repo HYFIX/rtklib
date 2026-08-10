@@ -112,6 +112,7 @@ static const char *help[]={
 " -dec              show rtcm decode info [no]",
 " -roti             compute ROTI in real-time and output stats [no]",
 " -mp               compute MP12/MP21 and output stats [no]",
+" -dur sec          run for a specified duration in seconds [no limit]",
 " -t  level         trace level [0]",
 " -fl file          log file [str2str.trace]",
 " -h                print help",
@@ -218,7 +219,7 @@ int main(int argc, char **argv)
     char *ant[]={"","",""},*rcv[]={"","",""},*logfile="";
     int i,j,n=0,dispint=5000,trlevel=0,opts[]={10000,10000,2000,32768,10,0,30,0};
     int types[MAXSTR]={STR_FILE,STR_FILE},stat[MAXSTR]={0},log_stat[MAXSTR]={0};
-    int byte[MAXSTR]={0},bps[MAXSTR]={0},fmts[MAXSTR]={0},sta=0,rtcmdec=0,roti=0,mp=0;
+    int byte[MAXSTR]={0},bps[MAXSTR]={0},fmts[MAXSTR]={0},sta=0,rtcmdec=0,roti=0,mp=0,duration=0;
     
     for (i=0;i<MAXSTR;i++) {
         paths[i]=s1[i];
@@ -272,6 +273,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i],"-dec" )) rtcmdec=1;
         else if (!strcmp(argv[i],"-roti")) roti=1;
         else if (!strcmp(argv[i],"-mp"  )) mp=1;
+        else if (!strcmp(argv[i],"-dur" )&&i+1<argc) duration=atoi(argv[++i]);
         else if (!strcmp(argv[i],"-t"  )&&i+1<argc) trlevel=atoi(argv[++i]);
         else if (*argv[i]=='-') printhelp();
     }
@@ -366,6 +368,7 @@ int main(int argc, char **argv)
         fprintf(stderr,"stream server start error\n");
         return -1;
     }
+    gtime_t start_time=timeget();
     for (intrflg=0;!intrflg;) {
         
         /* get stream server status */
@@ -377,6 +380,10 @@ int main(int argc, char **argv)
         fprintf(stderr,"%s [%s] %10d B %7d bps %s\n",
                 time_str(utc2gpst(timeget()),0),buff,byte[0],bps[0],strmsg);
         
+        if (duration>0&&timediff(timeget(),start_time)>=duration) {
+            break;
+        }
+        
         sleepms(dispint);
     }
     for (i=0;i<MAXSTR;i++) {
@@ -384,6 +391,10 @@ int main(int argc, char **argv)
     }
     /* stop stream server */
     strsvrstop(&strsvr,cmds);
+    
+    if (strsvr.mp) {
+        print_teqc_summary(&strsvr);
+    }
     
     for (i=0;i<n;i++) {
         strconvfree(conv[i]);

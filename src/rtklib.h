@@ -1213,11 +1213,20 @@ typedef struct {
 
 typedef struct {
     int n;              /* sample count in current arc */
-    double sum_mp12;    /* sum of MP12 */
-    double sum2_mp12;   /* sum of MP12^2 */
-    double sum_mp21;    /* sum of MP21 */
-    double sum2_mp21;   /* sum of MP21^2 */
+    double sum_mp12;    /* sum of MP12 in current arc */
+    double sum2_mp12;   /* sum of MP12^2 in current arc */
+    double sum_mp21;    /* sum of MP21 in current arc */
+    double sum2_mp21;   /* sum of MP21^2 in current arc */
     double last_tec;    /* last TEC value for slip check */
+    int iod_cs;         /* number of IOD cycle slips */
+    int mp1_cs;         /* number of MP1 cycle slips */
+    int mp2_cs;         /* number of MP2 cycle slips */
+    int n_valid;        /* total number of valid observations */
+    uint8_t code1;      /* signal 1 code */
+    uint8_t code2;      /* signal 2 code */
+    double accum_mp12;  /* accumulated sum of squared residuals for MP12 */
+    double accum_mp21;  /* accumulated sum of squared residuals for MP21 */
+    int total_n;        /* total number of accumulated observations */
 } mp_sat_t;
 
 typedef struct {        /* stream server type */
@@ -1775,6 +1784,7 @@ EXPORT int  strsvrstart(strsvr_t *svr, int *opts, int *strs, char **paths,
 EXPORT void strsvrstop (strsvr_t *svr, char **cmds);
 EXPORT void strsvrstat (strsvr_t *svr, int *stat, int *log_stat, int *byte,
                         int *bps, char *msg);
+EXPORT void print_teqc_summary(strsvr_t *svr);
 EXPORT strconv_t *strconvnew(int itype, int otype, const char *msgs, int staid,
                              int stasel, const char *opt);
 EXPORT void strconvfree(strconv_t *conv);
