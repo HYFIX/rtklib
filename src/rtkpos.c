@@ -1347,6 +1347,21 @@ static void holdamb(rtk_t *rtk, const double *xa)
     }
     free(v); free(H);
 }
+/* mark ssat[].fix[] flags for ambiguities referenced by rows of H -----------
+ * val=2: mark as validated/fixed by this stage's LAMBDA solve
+ * val=1: mark as float (candidate considered but not part of the validated set) */
+static void mark_fix_from_H(rtk_t *rtk, const double *H, int n_c, int nx, int val)
+{
+    int r,c,na=rtk->na,sat,f;
+    for (r=0;r<n_c;r++) {
+        for (c=na;c<nx;c++) {
+            if (fabs(H[c+r*nx])<0.5) continue;
+            f=(c-na)/MAXSAT;
+            sat=(c-na)%MAXSAT+1;
+            if (f>=0&&f<NFREQ&&sat>0&&sat<=MAXSAT) rtk->ssat[sat-1].fix[f]=val;
+        }
+    }
+}
 /* solve integer ambiguity constraint update --------------------------------*/
 static int solve_lambda_constraint(rtk_t *rtk, const char *name, int nx, int n_c, const double *H, double *x, double *P, double threshold)
 {
@@ -1433,6 +1448,7 @@ static int solve_lambda_constraint(rtk_t *rtk, const char *name, int nx, int n_c
                     P[r + r*nx] += 1e-6;
                     if (P[r + r*nx] < 1e-6) P[r + r*nx] = 1e-6;
                 }
+                mark_fix_from_H(rtk,H,n_c,nx,2);
                 stat=1;
             }
         }
@@ -1524,19 +1540,23 @@ static int solve_lambda_constraint(rtk_t *rtk, const char *name, int nx, int n_c
                                 P[r + r*nx] += 1e-6;
                                 if (P[r + r*nx] < 1e-6) P[r + r*nx] = 1e-6;
                             }
-                            
+
+                            /* downgrade all original candidates, then promote the surviving subset */
+                            mark_fix_from_H(rtk,H,n_c,nx,1);
+                            mark_fix_from_H(rtk,H_sub,k,nx,2);
+
                             stat_sub = k;
                         }
                     }
                 }
-                
+
                 free(H_sub); free(y_sub); free(Q_sub); free(b_sub); free(dy_sub);
                 free(PH_T_sub); free(K_sub); free(dx_sub); free(HP_sub); free(KHP_sub);
                 free(sub_idx);
-                
+
                 if (stat_sub > 0) break;
             }
-            
+
             free(sort_idx); free(var_val);
             if (stat_sub > 0) return 1;
         }
@@ -1563,8 +1583,7 @@ static int solve_lambda_constraint_NL(rtk_t *rtk, int nx, int n_c, const double 
     double *KHP;
     int i,j,r,c,info,stat=0;
     extern int partial_ar;
-    int nf=NF(opt);
-    
+
     if (n_c<2) {
         printf("NL AR: count=%d (too few ambiguities, skipped)\n", n_c);
         return 0;
@@ -1597,7 +1616,7 @@ static int solve_lambda_constraint_NL(rtk_t *rtk, int nx, int n_c, const double 
     /* solve LAMBDA */
     if (!(info=lambda(n_c,2,y,Qc,b,s))) {
         double ratio = s[0]>0 ? s[1]/s[0] : 999.9;
-        printf("NL AR: count=%d, ratio=%.2f (threshold=%.2f)%s\n", 
+        printf("NL AR: count=%d, ratio=%.2f (threshold=%.2f)%s\n",
                n_c, ratio, threshold, ratio >= threshold ? " - FIXED" : "");
         if (s[0]<=0.0||s[1]/s[0]>=threshold) {
             /* dy = y - b */
@@ -1634,11 +1653,12 @@ static int solve_lambda_constraint_NL(rtk_t *rtk, int nx, int n_c, const double 
                     P[r + r*nx] += 1e-6;
                     if (P[r + r*nx] < 1e-6) P[r + r*nx] = 1e-6;
                 }
-                stat=1;
+                mark_fix_from_H(rtk,H,n_c,nx,2);
+                stat=n_c; /* all n_c candidates were fixed */
             }
         }
         else if (partial_ar) {
-            int k, r, c, info_sub, stat_sub=0, nr_opt = NR(opt);
+            int k, r, c, info_sub, stat_sub=0;
             int *sort_idx = imat(n_c, 1);
             double *var_val = mat(n_c, 1);
             
@@ -1732,21 +1752,12 @@ static int solve_lambda_constraint_NL(rtk_t *rtk, int nx, int n_c, const double 
                                 if (P[r + r*nx] < 1e-6) P[r + r*nx] = 1e-6;
                             }
                             
-                            /* Update SSAT fix flags: set all to 1 (float) first */
-                            for (r=0; r<MAXSAT; r++) for (c=0; c<nf; c++) {
-                                rtk->ssat[r].fix[c] = 1;
-                            }
-                            /* Mark resolved subset elements as fixed */
-                            for (r=0; r<k; r++) {
-                                int ref_sat = -1, tar_sat = -1;
-                                for (c=0; c<nx; c++) {
-                                    if (H_sub[c + r*nx] > 0.5) ref_sat = c - nr_opt + 1;
-                                    if (H_sub[c + r*nx] < -0.5) tar_sat = c - nr_opt + 1;
-                                }
-                                if (ref_sat > 0 && ref_sat <= MAXSAT) rtk->ssat[ref_sat-1].fix[0] = 2;
-                                if (tar_sat > 0 && tar_sat <= MAXSAT) rtk->ssat[tar_sat-1].fix[0] = 2;
-                            }
-                            
+                            /* downgrade all original NL candidates, then promote the surviving subset
+                             * (scoped to the frequencies actually referenced by H/H_sub - leaves
+                             * EWL/WL fix flags set by earlier stages untouched) */
+                            mark_fix_from_H(rtk,H,n_c,nx,1);
+                            mark_fix_from_H(rtk,H_sub,k,nx,2);
+
                             s[0] = s_sub[0];
                             s[1] = s_sub[1];
                             stat_sub = k;
@@ -2012,13 +2023,19 @@ static int resamb_multistep(rtk_t *rtk, double *bias, double *xa)
                 }
             }
             
-            if (!solve_lambda_constraint_NL(rtk,nx,n_c,H,x_temp,P_temp,opt->thresar[0],bias,s)) {
-                trace(2,"resamb_multistep: NL AR validation failed\n");
-                free(H); free(x_temp); free(P_temp);
-                return 0;
+            {
+                int nl_fixed=solve_lambda_constraint_NL(rtk,nx,n_c,H,x_temp,P_temp,opt->thresar[0],bias,s);
+                if (!nl_fixed) {
+                    trace(2,"resamb_multistep: NL AR validation failed\n");
+                    free(H); free(x_temp); free(P_temp);
+                    return 0;
+                }
+                /* report how many NL ambiguities actually got fixed (may be less than the
+                 * n_c candidates considered if partial AR reduced the set) */
+                n_c=nl_fixed;
             }
             free(H);
-            
+
             rtk->sol.ratio=s[0]>0?(float)(s[1]/s[0]):0.0f;
             if (rtk->sol.ratio>999.9) rtk->sol.ratio=999.9f;
         }
@@ -2036,11 +2053,15 @@ static int resamb_multistep(rtk_t *rtk, double *bias, double *xa)
     
     /* Copy full fixed state to xa */
     memcpy(xa,x_temp,sizeof(double)*nx);
-    
-    /* Overwrite EKF float state and covariance with fixed states (only on successful final fix) */
-    memcpy(rtk->x, x_temp, sizeof(double)*nx);
-    memcpy(rtk->P, P_temp, sizeof(double)*nx*nx);
-    
+
+    /* NOTE: rtk->x/rtk->P (the float filter state) are intentionally left untouched here,
+     * matching resamb_LAMBDA's convention. x_temp/P_temp hold the fixed-hypothesis result
+     * for this epoch's reported solution only; committing them into the persistent float
+     * state would corrupt the filter on a false fix, since the float solution's own
+     * uncertainty would be destroyed with no way to recover on a later epoch. The fixed
+     * ambiguities are instead re-applied to the float state deliberately via holdamb()
+     * once opt->minfix consecutive fixes have accumulated. */
+
     free(x_temp); free(P_temp);
     return n_c;
 }
