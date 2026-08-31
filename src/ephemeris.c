@@ -607,11 +607,32 @@ static int satpos_ssr(gtime_t time, gtime_t teph, int sat, const nav_t *nav,
     const ssr_t *ssr;
     eph_t *eph;
     double t1,t2,t3,er[3],ea[3],ec[3],rc[3],deph[3],dclk,dant[3]={0},tk;
-    int i,sys;
-    
+    int i,sys,iode;
+
     trace(4,"satpos_ssr: time=%s sat=%2d\n",time_str(time,3),sat);
-    
+
     ssr=nav->ssr+sat-1;
+    sys=satsys(sat,NULL);
+
+    /* RTCM3 SSR's per-satellite "IODE" field for BDS is NOT the broadcast
+     * ephemeris's own IODE - BDS's real IODE-equivalent (AODE) is a separate
+     * 5-bit field, too coarse to reliably identify one ephemeris, so the SSR
+     * spec substitutes a toe-modulo-derived value here instead and adds a
+     * distinct 24-bit iodcrc (an actual ephemeris CRC) as the real matching
+     * key. rtcm3.c decodes iodcrc into ssr_t.iodcrc but nothing in this file
+     * ever applies it: seleph()/ephpos() below compare eph->iode (AODE, 0-31)
+     * directly against ssr->iode (the mismatched toe-modulo value), which can
+     * essentially never coincide - confirmed on real data (BDS C01, one full
+     * hour: broadcast AODE constant at 1, ssr->iode cycling 13/14/... every
+     * update, never matching). The practical effect is silent: every BDS
+     * satellite fails this exact-IODE match and never gets to use its SSR
+     * correction regardless of freshness, degrading to broadcast-only
+     * accuracy for the whole constellation. Until proper iodcrc-based
+     * matching is implemented, fall back to seleph()'s own nearest-toe
+     * selection (iode<0) for BDS specifically - the same "no exact IODE
+     * match available" fallback SBAS already uses unconditionally via
+     * selseph() (no iode parameter at all). */
+    iode = (sys==SYS_CMP) ? -1 : ssr->iode;
     
     if (!ssr->t0[0].time) {
         trace(2,"no ssr orbit correction: %s sat=%2d\n",time_str(time,0),sat);
@@ -656,12 +677,11 @@ static int satpos_ssr(gtime_t time, gtime_t teph, int sat, const nav_t *nav,
         return 0;
     }
     /* satellite postion and clock by broadcast ephemeris */
-    if (!ephpos(time,teph,sat,nav,ssr->iode,rs,dts,var,svh)) return 0;
-    
+    if (!ephpos(time,teph,sat,nav,iode,rs,dts,var,svh)) return 0;
+
     /* satellite clock for gps, galileo and qzss */
-    sys=satsys(sat,NULL);
     if (sys==SYS_GPS||sys==SYS_GAL||sys==SYS_QZS||sys==SYS_CMP) {
-        if (!(eph=seleph(teph,sat,ssr->iode,nav))) return 0;
+        if (!(eph=seleph(teph,sat,iode,nav))) return 0;
         
         /* satellite clock by clock parameters */
         tk=timediff(time,eph->toc);
