@@ -1630,7 +1630,7 @@ static int decode_ssr1(rtcm_t *rtcm, int sys, int subtype)
         case SYS_GLO: np=5; ni= 8; nj= 0; offp=  0; break;
         case SYS_GAL: np=6; ni=10; nj= 0; offp=  0; break;
         case SYS_QZS: np=4; ni= 8; nj= 0; offp=192; break;
-        case SYS_CMP: np=6; ni=10; nj=24; offp=  1; break;
+        case SYS_CMP: np=6; ni=10; nj= 8; offp=  1; break; /* DF470 toe mod + DF471 IOD */
         case SYS_SBS: np=6; ni= 9; nj=24; offp=120; break;
         default: return sync?0:10;
     }
@@ -1643,6 +1643,24 @@ static int decode_ssr1(rtcm_t *rtcm, int sys, int subtype)
         prn     =getbitu(rtcm->buff,i,np)+offp; i+=np;
         iode    =getbitu(rtcm->buff,i,ni);      i+=ni;
         iodcrc  =getbitu(rtcm->buff,i,nj);      i+=nj;
+        /* BDS satellite header is DF470 (10-bit toe modulo, scale 8) FOLLOWED
+           BY DF471 (8-bit IOD) - it has NO IODCRC, which is an SBAS-only field
+           (DF469). This used to read ni=10/nj=24, i.e. the SBAS layout, which
+           over-consumes 16 bits per BDS satellite and shifts every field after
+           it - so the orbit/clock corrections themselves were corrupted, and
+           ssr.iode held the toe modulo rather than an IOD and could never match
+           a broadcast ephemeris. Cross-checked against BNC 2.13.6
+           (src/RTCM3/clock_and_orbit/clock_orbit.h and clock_orbit_rtcm.cpp):
+             #define T_BDS_TOEMOD(a)  ADDBITS(10,(a/8))  DF470
+             #define T_BDS_IOD(a)     ADDBITS( 8, a)     DF471
+             case CLOCKORBIT_SATBDS: G_BDS_TOEMOD(..toe) G_GNSS_IOD(..IOD)
+           ni/nj below therefore carry the toe modulo and the IOD respectively,
+           and are swapped after reading so ssr.iode is the IOD that identifies
+           the referenced ephemeris. Only for the RTCM 125x messages (subtype
+           0); IGS-SSR (4076) already uses a plain 8-bit IOD, handled above. */
+        if (sys==SYS_CMP&&subtype==0) {
+            int toemod=iode; iode=iodcrc; iodcrc=toemod;
+        }
         deph [0]=getbits(rtcm->buff,i,22)*1E-4; i+=22;
         deph [1]=getbits(rtcm->buff,i,20)*4E-4; i+=20;
         deph [2]=getbits(rtcm->buff,i,20)*4E-4; i+=20;
@@ -1790,7 +1808,7 @@ static int decode_ssr4(rtcm_t *rtcm, int sys, int subtype)
         case SYS_GLO: np=5; ni= 8; nj= 0; offp=  0; break;
         case SYS_GAL: np=6; ni=10; nj= 0; offp=  0; break;
         case SYS_QZS: np=4; ni= 8; nj= 0; offp=192; break;
-        case SYS_CMP: np=6; ni=10; nj=24; offp=  1; break;
+        case SYS_CMP: np=6; ni=10; nj= 8; offp=  1; break; /* DF470 toe mod + DF471 IOD */
         case SYS_SBS: np=6; ni= 9; nj=24; offp=120; break;
         default: return sync?0:10;
     }
@@ -1803,6 +1821,24 @@ static int decode_ssr4(rtcm_t *rtcm, int sys, int subtype)
         prn     =getbitu(rtcm->buff,i,np)+offp; i+=np;
         iode    =getbitu(rtcm->buff,i,ni);      i+=ni;
         iodcrc  =getbitu(rtcm->buff,i,nj);      i+=nj;
+        /* BDS satellite header is DF470 (10-bit toe modulo, scale 8) FOLLOWED
+           BY DF471 (8-bit IOD) - it has NO IODCRC, which is an SBAS-only field
+           (DF469). This used to read ni=10/nj=24, i.e. the SBAS layout, which
+           over-consumes 16 bits per BDS satellite and shifts every field after
+           it - so the orbit/clock corrections themselves were corrupted, and
+           ssr.iode held the toe modulo rather than an IOD and could never match
+           a broadcast ephemeris. Cross-checked against BNC 2.13.6
+           (src/RTCM3/clock_and_orbit/clock_orbit.h and clock_orbit_rtcm.cpp):
+             #define T_BDS_TOEMOD(a)  ADDBITS(10,(a/8))  DF470
+             #define T_BDS_IOD(a)     ADDBITS( 8, a)     DF471
+             case CLOCKORBIT_SATBDS: G_BDS_TOEMOD(..toe) G_GNSS_IOD(..IOD)
+           ni/nj below therefore carry the toe modulo and the IOD respectively,
+           and are swapped after reading so ssr.iode is the IOD that identifies
+           the referenced ephemeris. Only for the RTCM 125x messages (subtype
+           0); IGS-SSR (4076) already uses a plain 8-bit IOD, handled above. */
+        if (sys==SYS_CMP&&subtype==0) {
+            int toemod=iode; iode=iodcrc; iodcrc=toemod;
+        }
         deph [0]=getbits(rtcm->buff,i,22)*1E-4; i+=22;
         deph [1]=getbits(rtcm->buff,i,20)*4E-4; i+=20;
         deph [2]=getbits(rtcm->buff,i,20)*4E-4; i+=20;
@@ -2839,6 +2875,22 @@ extern int decode_rtcm3(rtcm_t *rtcm)
         case 1261: ret=decode_ssr4(rtcm,SYS_CMP,0); break; /* draft */
         case 1262: ret=decode_ssr5(rtcm,SYS_CMP,0); break; /* draft */
         case 1263: ret=decode_ssr6(rtcm,SYS_CMP,0); break; /* draft */
+        /* SSR phase bias, RTCM 3 message types 1265-1270. These had NO dispatch
+           at all, so decode_ssr7() - which is present and complete, and does set
+           ssr.t0[5]/pbias[] - was never reached for an RTCM SSR stream; only the
+           IGS-SSR (4076) subtypes above could get to it. Any consumer gating on
+           ssr.t0[5] (as engine/orbit.c's get_sat_phase_bias() does) therefore saw
+           no phase bias ever, which leaves undifferenced ambiguities non-integer
+           and PPP-AR unable to fix. SSRA00CNE0 carries 1265/1266/1267/1270 at 720
+           messages each per hour, all previously discarded.
+           Numbering per BNC 2.13.6 clock_orbit_rtcm.h: PBTYPE_BASE = 1265, then
+           GPS, GLONASS, Galileo, QZSS, SBAS, BDS. */
+        case 1265: ret=decode_ssr7(rtcm,SYS_GPS,0); break;
+        case 1266: ret=decode_ssr7(rtcm,SYS_GLO,0); break;
+        case 1267: ret=decode_ssr7(rtcm,SYS_GAL,0); break;
+        case 1268: ret=decode_ssr7(rtcm,SYS_QZS,0); break;
+        case 1269: ret=decode_ssr7(rtcm,SYS_SBS,0); break;
+        case 1270: ret=decode_ssr7(rtcm,SYS_CMP,0); break;
         case   11: ret=decode_ssr7(rtcm,SYS_GPS,0); break; /* tentative */
         case   12: ret=decode_ssr7(rtcm,SYS_GAL,0); break; /* tentative */
         case   13: ret=decode_ssr7(rtcm,SYS_QZS,0); break; /* tentative */
