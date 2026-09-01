@@ -88,7 +88,30 @@ static int readsp3h(FILE *fp, gtime_t *time, char *type, int *sats,
         }
         else if (!strncmp(buff,"+ ",2)) { /* satellite id */
             if (ns==0) {
-                ns=(int)str2num(buff,4,2);
+                /* satellite-count field is 2 columns wide (offset 4) in
+                 * classic SP3-a/b/c (<=85 satellites, e.g. "+   26   G01...")
+                 * but SP3-d [5] widened it to 3 columns (offset 3) to allow
+                 * up to 999 satellites (e.g. "+  124   G01..." - true value
+                 * 124, right-justified). Reading only the old 2-column width
+                 * here silently truncated any 3-digit count to its last two
+                 * digits (124 -> "24"), which then capped every epoch's body
+                 * read (readsp3b()'s own n=ns*... line count) to the file's
+                 * first ~24 records - always exactly the first block of GPS
+                 * satellites in practice, since they're listed first, with
+                 * every satellite after that (higher GPS PRNs, and all of
+                 * GLONASS/Galileo/BDS on any real multi-GNSS SP3-d product)
+                 * silently never getting a position at all: not a crash, not
+                 * an error, satpos()/peph2pos() for the remaining satellites
+                 * would just fall through to nav->peph[].pos[sat-1] staying
+                 * fully zero. Confirmed on a real 124-satellite MGEX SP3-d
+                 * product (CODE COD0MGXFIN, 2025-11-01): every one of 289
+                 * epochs decoded as ns=24 GPS-only satellites before this
+                 * fix. Reading a 3-column field starting one column to the
+                 * left is backward-compatible with old 2-digit files too -
+                 * their own count sits right-justified in the same trailing
+                 * two columns, so the field just picks up one leading space
+                 * that str2num() already tolerates. */
+                ns=(int)str2num(buff,3,3);
             }
             for (j=0;j<17&&k<ns;j++) {
                 sys=code2sys(buff[9+3*j]);
@@ -183,7 +206,6 @@ static void readsp3b(FILE *fp, char type, int *sats, int ns, double *bfact,
             else if (sys==SYS_QZS) prn+=192; /* extension to sp3-c */
             
             if (!(sat=satno(sys,prn))) continue;
-            
             if (buff[0]=='P') {
                 pred_c=strlen(buff)>=76&&buff[75]=='P';
                 pred_o=strlen(buff)>=80&&buff[79]=='P';

@@ -652,14 +652,30 @@ static int readrnxh(FILE *fp, double *ver, char *type, int *sys, int *tsys,
     *ver=2.10; *type=' '; *sys=SYS_GPS;
     
     while (fgets(buff,MAXRNXLEN,fp)) {
-        
+
         if (strlen(buff)<=60) {
             continue;
         }
         else if (strstr(label,"RINEX VERSION / TYPE")) {
             *ver=str2num(buff,0,9);
             *type=*(buff+20);
-            
+            if (!strchr("ONGHJLC",*type) && strchr("ONGHJLC",*(buff+21))) {
+                /* some producers (e.g. CODE/AIUB's "CCRNXC" clock-format
+                 * writer) put the file type character one column to the
+                 * right of the RINEX 3.xx spec's own column 21 (byte offset
+                 * 20) - tolerate it rather than silently misreading every
+                 * such file as an unrecognized type (falls through to
+                 * *type==' ', which readrnxfp()'s own flag check then
+                 * treats as "not a clock file" even when opt/flag=1 asked
+                 * for one, causing readrnxclk() to never be called and the
+                 * whole read to silently return 0/empty - no crash, no
+                 * error message, just zero clock records). Confirmed on
+                 * real files, not a one-off: CODE's own MGEX CLK products
+                 * (COD0MGXFIN_..._CLK.CLK) consistently have 'C' at column
+                 * 22 rather than 21 across multiple independent dates. */
+                *type=*(buff+21);
+            }
+
             /* satellite system */
             switch (*(buff+40)) {
                 case ' ':
@@ -1447,20 +1463,36 @@ static int readrnxclk(FILE *fp, const char *opt, int index, nav_t *nav)
     mask=set_sysmask(opt);
     
     while (fgets(buff,sizeof(buff),fp)) {
-        
-        if (str2time(buff,8,26,&time)) {
+
+        /* RINEX-3 clock body records (AS satellite / AR receiver) share one
+         * fixed-width ID field spanning columns 4-13 (0-indexed offset 3,
+         * width 10) before the epoch begins at offset 13 - wide enough for
+         * an AR record's up to-9-char station name (e.g. "WAB200CHE"), which
+         * a short AS satellite PRN ("C06") is then left-justified and
+         * space-padded to match. The classic offsets below (8/40) assume a
+         * narrower ID field (as in RINEX-2-era clock files) and are 5
+         * columns short for this wider RINEX-3 layout - confirmed against a
+         * real RINEX 3.04 MGEX clock product (CODE COD0MGXFIN) byte-for-byte:
+         * with the old offset, the epoch string parsed (leniently) close
+         * enough to still work, but the clock-value field silently captured
+         * the *previous* field instead (the literal "Nv" value-count digit,
+         * always exactly 2 or 1 for a valid record) rather than the actual
+         * clock bias - not a crash, just a wildly wrong ~1-2s "clock bias"
+         * (real GPS/GLONASS/Galileo/BDS clock biases are microsecond-scale)
+         * silently fed into every downstream position solution. */
+        if (str2time(buff,13,26,&time)) {
             trace(2,"rinex clk invalid epoch: %34.34s\n",buff);
             continue;
         }
         strncpy(satid,buff+3,4);
-        
+
         /* only read AS (satellite clock) record */
         if (strncmp(buff,"AS",2)||!(sat=satid2no(satid))) continue;
-        
+
         if (!(satsys(sat,NULL)&mask)) continue;
-        
-        for (i=0,j=40;i<2;i++,j+=20) data[i]=str2num(buff,j,19);
-        
+
+        for (i=0,j=45;i<2;i++,j+=20) data[i]=str2num(buff,j,19);
+
         if (nav->nc>=nav->ncmax) {
             nav->ncmax+=1024;
             if (!(nav_pclk=(pclk_t *)realloc(nav->pclk,sizeof(pclk_t)*(nav->ncmax)))) {
