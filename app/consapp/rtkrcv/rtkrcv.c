@@ -165,14 +165,15 @@ extern int bie_ar;
 
 /* help text -----------------------------------------------------------------*/
 static const char *usage[]={
-    "usage: rtkrcv [-s][-p port][-d dev][-o file][-w pwd][-r level][-t level][-sta sta]",
+    "usage: rtkrcv [-s][-p port][-console][-d dev][-o file][-w pwd][-r level][-t level][-sta sta]",
     "              [-rover path][-base path][-eph path][-mode mode][-nf nf][-basepos basepos]",
     "              [-sys system][-soltype type][-sol path][-rawlog][-screen][-armode mode][-par][-bie]",
     "options",
     "  -s             start RTK server on program startup",
     "  -p port        port number for telnet console",
+    "  -console       enable local interactive console on stdin/stdout (disabled by default)",
     "  -m port        port number for monitor stream",
-    "  -d dev         terminal device for console",
+    "  -d dev         terminal device for console (requires -console)",
     "  -o file        processing options file",
     "  -w pwd         login password for remote console (\"\": no password)",
     "  -r level       output solution status file (0:off,1:states,2:residuals)",
@@ -1565,25 +1566,28 @@ static void accept_sock(int ssock, con_t **con)
 }
 /* rtkrcv main -----------------------------------------------------------------
 * sysnopsis
-*     rtkrcv [-s][-p port][-d dev][-o file][-r level][-t level][-sta sta]
+*     rtkrcv [-s][-p port][-console][-d dev][-o file][-r level][-t level][-sta sta]
 *
 * description
 *     A command line version of the real-time positioning AP by rtklib. To start
 *     or stop RTK server, to configure options or to print solution/status,
-*     login a console and input commands. As default, /dev/tty is used for the
-*     console. Use -p option for network login with telnet protocol. To show
-*     the available commands, type ? or help on the console. With -p option,
-*     multiple telnet console logins are allowed. The initial processing options
-*     are loaded from default file rtkrcv.conf. To change the file, use -o
-*     option. To configure the processing options, edit the options file or use
-*     set, load or save command on the console. To shutdown the program, use
-*     shutdown command on the console or send USR2 signal to the process.
+*     login a console and input commands. The local interactive console
+*     (/dev/tty by default) is disabled unless -console is given. Use -p option
+*     for network login with telnet protocol; the telnet console is independent
+*     of -console and always available when -p is given. To show the available
+*     commands, type ? or help on the console. With -p option, multiple telnet
+*     console logins are allowed. The initial processing options are loaded
+*     from default file rtkrcv.conf. To change the file, use -o option. To
+*     configure the processing options, edit the options file or use set, load
+*     or save command on the console. To shutdown the program, use shutdown
+*     command on the console or send USR2 signal to the process.
 *
 * option
 *     -s         start RTK server on program startup
 *     -p port    port number for telnet console
+*     -console   enable local interactive console on stdin/stdout (disabled by default)
 *     -m port    port number for monitor stream
-*     -d dev     terminal device for console
+*     -d dev     terminal device for console (requires -console)
 *     -o file    processing options file
 *     -w pwd     login password for remote console ("": no password)
 *     -r level   output solution status file (0:off,1:states,2:residuals)
@@ -1670,7 +1674,7 @@ static void accept_sock(int ssock, con_t **con)
 int main(int argc, char **argv)
 {
     con_t *con[MAXCON]={0};
-    int i,start=0,port=0,outstat=0,trace=0,sock=0;
+    int i,start=0,port=0,outstat=0,trace=0,sock=0,console=0;
     char *dev="",file[MAXSTR]="";
     char rover_path[MAXSTR]="";
     char base_path[MAXSTR]="";
@@ -1692,6 +1696,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i],"-p")&&i+1<argc) port=atoi(argv[++i]);
         else if (!strcmp(argv[i],"-m")&&i+1<argc) moniport=atoi(argv[++i]);
         else if (!strcmp(argv[i],"-d")&&i+1<argc) dev=argv[++i];
+        else if (!strcmp(argv[i],"-console")) console=1;
         else if (!strcmp(argv[i],"-o")&&i+1<argc) strcpy(file,argv[++i]);
         else if (!strcmp(argv[i],"-w")&&i+1<argc) strcpy(passwd,argv[++i]);
         else if (!strcmp(argv[i],"-r")&&i+1<argc) outstat=atoi(argv[++i]);
@@ -1889,7 +1894,7 @@ int main(int argc, char **argv)
             return -1;
         }
     }
-    else if (!outscreen) {
+    else if (!outscreen&&console) {
         /* open device for local console */
         if (!(con[0]=con_open(0,dev))) {
             fprintf(stderr,"console open error dev=%s\n",dev);

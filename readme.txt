@@ -96,6 +96,13 @@ UPDATE HISTORY
                           unless combined with a paired MSM4-7 message, per
                           the RTCM MSM1-3 message design
 
+2026/09/09  HYFIX fork  add -console option to rtkrcv to enable the local
+                          interactive console on stdin/stdout; disabled by
+                          default so rtkrcv can run headless (e.g. under a
+                          service manager) without a console reading stdin;
+                          the -d terminal device option now requires
+                          -console, and the -p telnet console is unaffected
+
 2014/09/07  2.4.3 b1  add 3-panel and veritical-panel modes for RTKNAVI
                       add sky image overlay to skyplot for RTKPLOT
                       fix invalid identification of obs type "C2" (#113)
