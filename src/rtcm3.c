@@ -2686,7 +2686,8 @@ static int decode_msm7(rtcm_t *rtcm, int sys)
         half[j]=getbitu(rtcm->buff,i,1); i+=1;
     }
     for (j=0;j<ncell;j++) { /* cnr */
-        cnr[j]=getbitu(rtcm->buff,i,10)*0.0625; i+=10;
+        /* XONA (SYS_LEO) uses 1/8 dB-Hz per bit; standard RTCM MSM7 uses 1/16 */
+        cnr[j]=getbitu(rtcm->buff,i,10)*(sys==SYS_LEO?0.125:0.0625); i+=10;
     }
     for (j=0;j<ncell;j++) { /* phaserangerate */
         rrv=getbits(rtcm->buff,i,15); i+=15;
