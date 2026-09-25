@@ -767,9 +767,17 @@ extern double code2freq(int sys, uint8_t code, int fcn)
 |       Channel |  4 | -3 |  3 |  2 |  4 | -3 |  3 |  2 | -5 | -6 | 
 |---------------|----|----|----|----|----|----|----|----|
 */
+/* frequency channel numbers set at run time from the broadcast ephemeris (RTCM 1020), fcn+8 (0: not set) */
+static volatile int glo_fcn_dyn[MAXPRNGLO+1];
+extern void set_glo_fcn(int prn, int fcn)
+{
+    if (prn<1||prn>MAXPRNGLO||fcn<-7||fcn>6) return;
+    glo_fcn_dyn[prn]=fcn+8;
+}
 extern int get_glo_fcn_default(int prn)
 {
     int ret = -8;
+    if (prn>=1&&prn<=MAXPRNGLO&&glo_fcn_dyn[prn]>0) return glo_fcn_dyn[prn]-8; /* broadcast */
     /* plane 1 */
          if (prn == 1) ret = 1;
     else if (prn == 2) ret =-4;
@@ -803,6 +811,7 @@ extern int get_glo_fcn_default(int prn)
 
     else if (prn ==25) ret =-5;
     else if (prn ==26) ret =-6;
+    else if (prn ==27) ret =-5;
 
     return ret;
 }

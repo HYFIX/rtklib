@@ -1359,6 +1359,7 @@ EXPORT int  testsnr(int base, int freq, double el, double snr,
 EXPORT void setcodepri(int sys, int idx, const char *pri);
 EXPORT int  getcodepri(int sys, uint8_t code, const char *opt);
 EXPORT int  get_glo_fcn_default(int prn);
+EXPORT void set_glo_fcn(int prn, int fcn); /* run time frequency channel number (from the broadcast ephemeris) */
 /* matrix and vector functions -----------------------------------------------*/
 EXPORT double *mat  (int n, int m);
 EXPORT int    *imat (int n, int m);
