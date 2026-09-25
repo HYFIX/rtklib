@@ -103,6 +103,17 @@ UPDATE HISTORY
                           the -d terminal device option now requires
                           -console, and the -p telnet console is unaffected
 
+2026/09/24  HYFIX fork  fix: MSM7 CNR scale for XONA (SYS_LEO) satellites:
+                          XONA's proprietary ICD specifies 1/8 dB-Hz
+                          resolution for the 10-bit high-resolution CNR
+                          field in MSM7, whereas RTCM 10403.3 specifies
+                          1/16 dB-Hz for all standard constellations;
+                          using the wrong scale halved every reported SNR
+                          value for XONA satellites, biasing SNR masking
+                          and signal quality weighting in the RTK engine;
+                          decode_msm7() now branches on sys==SYS_LEO to
+                          apply 0.125 instead of 0.0625
+
 2014/09/07  2.4.3 b1  add 3-panel and veritical-panel modes for RTKNAVI
                       add sky image overlay to skyplot for RTKPLOT
                       fix invalid identification of obs type "C2" (#113)
