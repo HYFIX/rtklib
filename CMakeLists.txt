@@ -67,6 +67,29 @@ add_executable(rnx2rtkp
     src/tides.c   
     )
 
+add_executable(geod2rtkp
+    app/consapp/geod2rtkp/geod2rtkp.c
+    src/rtklib.h
+    src/rtkcmn.c
+    src/rtkpos.c
+    src/solution.c
+    src/lambda.c
+    src/sbas.c
+    src/preceph.c
+    src/pntpos.c
+    src/geoid.c
+    src/ephemeris.c
+    src/options.c
+    src/ppp.c
+    src/ppp_ar.c
+    src/rtcm.c
+    src/rtcm2.c
+    src/rtcm3.c
+    src/rtcm3e.c
+    src/ionex.c
+    src/tides.c
+    )
+
 add_executable(rtkrcv
     app/consapp/rtkrcv/rtkrcv.c
     app/consapp/rtkrcv/vt.c
@@ -135,11 +158,13 @@ add_executable(str2str
 if(WIN32)
     target_link_libraries(convbin  Winmm.lib)
     target_link_libraries(rnx2rtkp Winmm.lib)
+    target_link_libraries(geod2rtkp Winmm.lib)
     target_link_libraries(rtkrcv   Winmm.lib ws2_32.lib)
     target_link_libraries(str2str  Winmm.lib ws2_32.lib)
 else()
     target_link_libraries(convbin  m)
     target_link_libraries(rnx2rtkp m)
+    target_link_libraries(geod2rtkp m)
     target_link_libraries(rtkrcv   m pthread)
     target_link_libraries(str2str  m pthread)
 endif()

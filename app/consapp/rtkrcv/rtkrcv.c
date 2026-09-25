@@ -182,12 +182,14 @@ static const char *usage[]={
     "  -rover path    rover stream path (e.g. user:passwd@host:port/mnt)",
     "  -base path     base stream path",
     "  -eph path      ephemeris stream path",
-    "  -mode mode     positioning mode (0:single,1:dgps,2:kinematic,3:static,4:moving-base,5:fixed) [2]",
+    "  -mode mode     positioning mode (0:single,1:dgps,2:kinematic,3:static,4:moving-base,5:fixed)",
+    "                   [2 if -rover+-base given, else 0]",
     "  -nf nf         number of frequencies (1:L1,2:L1+L2,3:L1+L2+L5) [3]",
     "  -basepos pos   base position (rtcm | xyz x y z | blh lat lon hgt)",
-    "  -sys system    navigation systems comma-separated (gps,glo,gal,bds,qzs,sbs,all)",
+    "  -sys system    navigation systems comma-separated (gps,glo,gal,bds,qzs,sbs,all) [gps,glo,gal,bds]",
     "  -soltype type  solution format type (dms | deg | xyz | enu) [dms]",
     "  -sol path      solution output file path",
+    "                   [default: yyyy-mm-dd-hh-MM-SS-<rover-id>.pos|nmea if -rover given]",
     "  -rawlog        enable custom raw stream logs",
     "  -screen        output solution to screen (stdout)",
     "  -armode mode   AR mode (off | cont | inst | fixhold | wlnl | tcar)",
@@ -1800,8 +1802,10 @@ int main(int argc, char **argv)
     /* apply defaults and command line overrides */
     if (mode_val >= 0) {
         prcopt.mode = mode_val;
+    } else if (*rover_path && *base_path) {
+        prcopt.mode = PMODE_KINEMA; /* Default to Kinematic (RTK) when base+rover given */
     } else {
-        prcopt.mode = PMODE_KINEMA; /* Default to Kinematic */
+        prcopt.mode = PMODE_SINGLE; /* Default to single point positioning */
     }
 
     if (nf_val >= 0) {
@@ -1810,12 +1814,14 @@ int main(int argc, char **argv)
         prcopt.nf = 3; /* Default to L1+L2+L5 */
     }
 
-    if (soltype_val >= 0) {
-        soltype = soltype_val;
-    }
-
     if (sys_val >= 0) {
         prcopt.navsys = sys_val;
+    } else {
+        prcopt.navsys = SYS_GPS|SYS_GLO|SYS_GAL|SYS_CMP; /* Default to GPS+GLO+GAL+BDS */
+    }
+
+    if (soltype_val >= 0) {
+        soltype = soltype_val;
     }
 
     if (armode_val >= 0) {
@@ -1850,8 +1856,30 @@ int main(int argc, char **argv)
         strcpy(strpath[3], sol_path);
         strfmt[3] = SOLF_LLH;
     }
+    else if (*rover_path && strtype[3]==STR_NONE) {
+        /* default solution output file: yyyy-mm-dd-hh-MM-SS-<rover-id>.pos|nmea,
+           timestamped with (UTC) system time; rover-id is the rover stream's
+           NTRIP mountpoint (the path segment after the last '/') */
+        gtime_t gt=utc2gpst(timeget());
+        double ep[6];
+        char tstr[32],mnt[MAXSTR],*p;
+        const char *ext=strfmt[3]==SOLF_NMEA?"nmea":"pos";
 
-    if (basepos_mode == 0) {
+        time2epoch(gt,ep);
+        sprintf(tstr,"%04.0f-%02.0f-%02.0f-%02.0f-%02.0f-%02.0f",
+                ep[0],ep[1],ep[2],ep[3],ep[4],ep[5]);
+        if ((p=strrchr(rover_path,'/'))) strcpy(mnt,p+1); else strcpy(mnt,"rover");
+
+        strtype[3] = STR_FILE;
+        sprintf(strpath[3],"%s-%s.%s",tstr,mnt,ext);
+    }
+
+    if (basepos_mode < 0 && *rover_path && *base_path) {
+        /* base+rover streams given, no -basepos: take base position from the
+           base stream's own RTCM 1005/1006 station coordinate message */
+        prcopt.refpos = POSOPT_RTCM;
+    }
+    else if (basepos_mode == 0) {
         prcopt.refpos = POSOPT_RTCM;
     }
     else if (basepos_mode == 1) {

@@ -815,7 +815,7 @@ extern int get_glo_fcn_default(int prn)
 *-----------------------------------------------------------------------------*/
 extern double sat2freq(int sat, uint8_t code, const nav_t *nav)
 {
-    int i,fcn=0,sys,prn;
+    int i,fcn=-99,sys,prn;
     
     sys=satsys(sat,&prn);
     
