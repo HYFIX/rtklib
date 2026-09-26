@@ -1443,7 +1443,8 @@ extern int outprcopts(uint8_t *buff, const prcopt_t *opt)
     p+=sprintf(p,"%s pos mode  : %s\r\n",COMMENTH,s1[opt->mode]);
     
     if (PMODE_DGPS<=opt->mode&&opt->mode<=PMODE_FIXED) {
-        p+=sprintf(p,"%s freqs     : %s\r\n",COMMENTH,s2[opt->nf-1]);
+        p+=sprintf(p,"%s freqs     : %s\r\n",COMMENTH,
+                   opt->nf==2&&opt->freqopt==1?"L1+5":s2[opt->nf-1]);
     }
     if (opt->mode>PMODE_SINGLE) {
         p+=sprintf(p,"%s solution  : %s\r\n",COMMENTH,s3[opt->soltype]);

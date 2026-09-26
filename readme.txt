@@ -103,6 +103,35 @@ UPDATE HISTORY
                           the -d terminal device option now requires
                           -console, and the -p telnet console is unaffected
 
+2026/09/24  HYFIX fork  fix: MSM7 CNR scale for XONA (SYS_LEO) satellites:
+                          XONA's proprietary ICD specifies 1/8 dB-Hz
+                          resolution for the 10-bit high-resolution CNR
+                          field in MSM7, whereas RTCM 10403.3 specifies
+                          1/16 dB-Hz for all standard constellations;
+                          using the wrong scale halved every reported SNR
+                          value for XONA satellites, biasing SNR masking
+                          and signal quality weighting in the RTK engine;
+                          decode_msm7() now branches on sys==SYS_LEO to
+                          apply 0.125 instead of 0.0625
+
+2026/09/24  HYFIX fork  feat: multi-frequency RTK constellation signal plan:
+                          add selfreqidx() in rtkpos.c to map RTK frequency
+                          slots (f=0..nf-1) to specific physical signal codes
+                          per constellation based on nf (1 to 6):
+                            nf=2: GPS L1+L2, GLO G1+G2, GAL E1+E5b,
+                                  BDS B1I+B3I, QZS L1+L2
+                            nf=3: GPS L1+L2+L5, GLO G1+G2, GAL E1+E5b+E5a,
+                                  BDS B1I+B3I+B2a, QZS L1+L2+L5
+                            nf=4: GAL E1+E5b+E5a+E6, BDS B1I+B3I+B2a+B2b,
+                                  QZS L1+L2+L5+L6
+                            nf=5: GAL E1+E5b+E5a+E6+E5ab,
+                                  BDS B1I+B3I+B2b+B2a+B1C
+                            nf=6: BDS B1I+B3I+B2b+B2a+B1C+B2ab
+                          support alternate dual-frequency option (L1+L5) via
+                          freqopt=1; update detslp_ll, udbias, zdres_sat, and
+                          relpos to route phase/code/snr/lli accesses through
+                          selfreqidx()
+
 2014/09/07  2.4.3 b1  add 3-panel and veritical-panel modes for RTKNAVI
                       add sky image overlay to skyplot for RTKPLOT
                       fix invalid identification of obs type "C2" (#113)

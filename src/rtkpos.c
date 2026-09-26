@@ -367,22 +367,76 @@ static void errmsg(rtk_t *rtk, const char *format, ...)
     rtk->neb+=n;
     trace(2,"%s",buff);
 }
-/* single-differenced observable ---------------------------------------------*/
-static double sdobs(const obsd_t *obs, int i, int j, int k)
+/* select observation index for an RTK frequency slot -------------------------
+ * The plan is expressed by the RINEX band digit. This is necessary for BDS,
+ * where B1I ('2') and B1C ('1') have the same code2idx() value but must occupy
+ * separate RTK slots for nf=5 and nf=6. Search extended observations as well
+ * as canonical frequency slots so both signals can be used. freqopt=1 selects
+ * the alternate dual-frequency plan; BDS-2 is identified as PRN C01-C18.
+ *-----------------------------------------------------------------------------*/
+static int selfreqidx(const obsd_t *obs, int nf, int f, int freqopt)
 {
-    double pi=(k<NFREQ)?obs[i].L[k]:obs[i].P[k-NFREQ];
-    double pj=(k<NFREQ)?obs[j].L[k]:obs[j].P[k-NFREQ];
-    return pi==0.0||pj==0.0?0.0:pi-pj;
+    /* rows nf=1..6; characters are ordered RINEX band digits by RTK slot */
+    static const char gps[6][7]={"1","12","125","125","125","125"};
+    static const char glo[6][7]={"1","12","12","12","12","12"};
+    static const char gal[6][7]={"1","17","175","1756","17568","17568"};
+    static const char qzs[6][7]={"1","12","125","1256","1256","1256"};
+    /* BDS: B1I=2, B3I=6, B2b=7, B2a=5, B1C=1, B2ab=8 */
+    static const char bds[6][7]={"2","26","265","2657","26751","267518"};
+    const char *plan=NULL;
+    char band;
+    int i,prn,row=(nf<1?0:nf>6?5:nf-1),sys=satsys(obs->sat,&prn);
+
+    if (f<0||f>=nf||f>=6) return -1;
+    if (nf==2&&freqopt==1) {
+        switch (sys) {
+            case SYS_GPS: plan="15"; break;
+            case SYS_GLO: plan="1";  break;
+            case SYS_GAL: plan="15"; break;
+            case SYS_QZS: plan="15"; break;
+            case SYS_CMP: plan=prn<=18?"2":"15"; break;
+            default: return f<NFREQ+NEXOBS?f:-1;
+        }
+    }
+    else {
+        switch (sys) {
+            case SYS_GPS: plan=gps[row]; break;
+            case SYS_GLO: plan=glo[row]; break;
+            case SYS_GAL: plan=gal[row]; break;
+            case SYS_QZS: plan=qzs[row]; break;
+            case SYS_CMP: plan=bds[row]; break;
+            default: return f<NFREQ+NEXOBS?f:-1;
+        }
+    }
+    if (!(band=plan[f])) return -1;
+
+    for (i=0;i<NFREQ+NEXOBS;i++) {
+        if (obs->code[i]!=CODE_NONE&&code2obs(obs->code[i])[0]==band) return i;
+    }
+    return -1;
+}
+/* single-differenced observable ---------------------------------------------*/
+static double sdobs(const obsd_t *obs, int i, int j, int pi, int pj, int phase)
+{
+    double oi,oj;
+    if (pi<0||pj<0) return 0.0;
+    oi=phase?obs[i].L[pi]:obs[i].P[pi];
+    oj=phase?obs[j].L[pj]:obs[j].P[pj];
+    return oi==0.0||oj==0.0?0.0:oi-oj;
 }
 /* single-differenced geometry-free linear combination of phase --------------*/
-static double gfobs(const obsd_t *obs, int i, int j, int k, const nav_t *nav)
+static double gfobs(const obsd_t *obs, int i, int j, int nf, int k,
+                    int freqopt, const nav_t *nav)
 {
     double freq1,freq2,L1,L2;
-    
-    freq1=sat2freq(obs[i].sat,obs[i].code[0],nav);
-    freq2=sat2freq(obs[i].sat,obs[i].code[k],nav);
-    L1=sdobs(obs,i,j,0);
-    L2=sdobs(obs,i,j,k);
+    int p0=selfreqidx(obs+i,nf,0,freqopt),pk=selfreqidx(obs+i,nf,k,freqopt);
+    int q0=selfreqidx(obs+j,nf,0,freqopt),qk=selfreqidx(obs+j,nf,k,freqopt);
+    if (p0<0||pk<0||q0<0||qk<0) return 0.0;
+
+    freq1=sat2freq(obs[i].sat,obs[i].code[p0],nav);
+    freq2=sat2freq(obs[i].sat,obs[i].code[pk],nav);
+    L1=sdobs(obs,i,j,p0,q0,1);
+    L2=sdobs(obs,i,j,pk,qk,1);
     if (freq1==0.0||freq2==0.0||L1==0.0||L2==0.0) return 0.0;
     return L1*CLIGHT/freq1-L2*CLIGHT/freq2;
 }
@@ -604,13 +658,15 @@ static void udrcvbias(rtk_t *rtk, double tt)
 static void detslp_ll(rtk_t *rtk, const obsd_t *obs, int i, int rcv)
 {
     uint32_t slip,LLI;
-    int f,sat=obs[i].sat;
+    int f,p,sat=obs[i].sat,nf=rtk->opt.nf;
     
     trace(3,"detslp_ll: i=%d rcv=%d\n",i,rcv);
     
-    for (f=0;f<rtk->opt.nf;f++) {
+    for (f=0;f<nf;f++) {
+        p=selfreqidx(obs+i,nf,f,rtk->opt.freqopt);
+        if (p<0) continue;
         
-        if (obs[i].L[f]==0.0||
+        if (obs[i].L[p]==0.0||
             fabs(timediff(obs[i].time,rtk->ssat[sat-1].pt[rcv-1][f]))<DTTOL) {
             continue;
         }
@@ -620,11 +676,11 @@ static void detslp_ll(rtk_t *rtk, const obsd_t *obs, int i, int rcv)
         
         /* detect slip by cycle slip flag in LLI */
         if (rtk->tt>=0.0) { /* forward */
-            if (obs[i].LLI[f]&1) {
+            if (obs[i].LLI[p]&1) {
                 errmsg(rtk,"slip detected forward  (sat=%2d rcv=%d F=%d LLI=%x)\n",
-                       sat,rcv,f+1,obs[i].LLI[f]);
+                       sat,rcv,f+1,obs[i].LLI[p]);
             }
-            slip=obs[i].LLI[f];
+            slip=obs[i].LLI[p];
         }
         else { /* backward */
             if (LLI&1) {
@@ -634,18 +690,18 @@ static void detslp_ll(rtk_t *rtk, const obsd_t *obs, int i, int rcv)
             slip=LLI;
         }
         /* detect slip by parity unknown flag transition in LLI */
-        if (((LLI&2)&&!(obs[i].LLI[f]&2))||(!(LLI&2)&&(obs[i].LLI[f]&2))) {
+        if (((LLI&2)&&!(obs[i].LLI[p]&2))||(!(LLI&2)&&(obs[i].LLI[p]&2))) {
             errmsg(rtk,"slip detected half-cyc (sat=%2d rcv=%d F=%d LLI=%x->%x)\n",
-                   sat,rcv,f+1,LLI,obs[i].LLI[f]);
+                   sat,rcv,f+1,LLI,obs[i].LLI[p]);
             slip|=1;
         }
         /* save current LLI */
-        if (rcv==1) setbitu(&rtk->ssat[sat-1].slip[f],0,2,obs[i].LLI[f]);
-        else        setbitu(&rtk->ssat[sat-1].slip[f],2,2,obs[i].LLI[f]);
+        if (rcv==1) setbitu(&rtk->ssat[sat-1].slip[f],0,2,obs[i].LLI[p]);
+        else        setbitu(&rtk->ssat[sat-1].slip[f],2,2,obs[i].LLI[p]);
         
         /* save slip and half-cycle valid flag */
         rtk->ssat[sat-1].slip[f]|=(uint8_t)slip;
-        rtk->ssat[sat-1].half[f]=(obs[i].LLI[f]&2)?0:1;
+        rtk->ssat[sat-1].half[f]=(obs[i].LLI[p]&2)?0:1;
     }
 }
 /* detect cycle slip by geometry free phase jump -----------------------------*/
@@ -658,7 +714,7 @@ static void detslp_gf(rtk_t *rtk, const obsd_t *obs, int i, int j,
     trace(3,"detslp_gf: i=%d j=%d\n",i,j);
     
     for (k=1;k<rtk->opt.nf;k++) {
-        if ((g1=gfobs(obs,i,j,k,nav))==0.0) return;
+        if ((g1=gfobs(obs,i,j,rtk->opt.nf,k,rtk->opt.freqopt,nav))==0.0) continue;
          
         g0=rtk->ssat[sat-1].gf[k-1];
         rtk->ssat[sat-1].gf[k-1]=g1;
@@ -729,8 +785,10 @@ static void udbias(rtk_t *rtk, double tt, const obsd_t *obs, const int *sat,
         
         /* update half-cycle valid flag */
         for (k=0;k<nf;k++) {
-            rtk->ssat[sat[i]-1].half[k]=
-                !((obs[iu[i]].LLI[k]&2)||(obs[ir[i]].LLI[k]&2));
+            int pk=selfreqidx(obs+iu[i],nf,k,rtk->opt.freqopt);
+            int qk=selfreqidx(obs+ir[i],nf,k,rtk->opt.freqopt);
+            rtk->ssat[sat[i]-1].half[k]=pk>=0&&qk>=0&&
+                !((obs[iu[i]].LLI[pk]&2)||(obs[ir[i]].LLI[qk]&2));
         }
     }
     for (k=0;k<nf;k++) {
@@ -766,22 +824,31 @@ static void udbias(rtk_t *rtk, double tt, const obsd_t *obs, const int *sat,
         
         /* estimate approximate phase-bias by phase - code */
         for (i=j=0,offset=0.0;i<ns;i++) {
+            int pk=selfreqidx(obs+iu[i],nf,k,rtk->opt.freqopt);
+            int qk=selfreqidx(obs+ir[i],nf,k,rtk->opt.freqopt);
             
             if (rtk->opt.ionoopt!=IONOOPT_IFLC) {
-                cp=sdobs(obs,iu[i],ir[i],k); /* cycle */
-                pr=sdobs(obs,iu[i],ir[i],k+NFREQ);
-                freqi=sat2freq(sat[i],obs[iu[i]].code[k],nav);
+                if (pk<0||qk<0) continue;
+                cp=sdobs(obs,iu[i],ir[i],pk,qk,1); /* cycle */
+                pr=sdobs(obs,iu[i],ir[i],pk,qk,0);
+                freqi=sat2freq(sat[i],obs[iu[i]].code[pk],nav);
                 if (cp==0.0||pr==0.0||freqi==0.0) continue;
                 
                 bias[i]=cp-pr*freqi/CLIGHT;
             }
             else {
-                cp1=sdobs(obs,iu[i],ir[i],0);
-                cp2=sdobs(obs,iu[i],ir[i],1);
-                pr1=sdobs(obs,iu[i],ir[i],NFREQ);
-                pr2=sdobs(obs,iu[i],ir[i],NFREQ+1);
-                freq1=sat2freq(sat[i],obs[iu[i]].code[0],nav);
-                freq2=sat2freq(sat[i],obs[iu[i]].code[1],nav);
+                /* iono-free: always uses the two primary slots (0 and 1) */
+                int p0=selfreqidx(obs+iu[i],nf,0,rtk->opt.freqopt);
+                int p1=selfreqidx(obs+iu[i],nf,1,rtk->opt.freqopt);
+                int q0=selfreqidx(obs+ir[i],nf,0,rtk->opt.freqopt);
+                int q1=selfreqidx(obs+ir[i],nf,1,rtk->opt.freqopt);
+                if (p0<0||p1<0||q0<0||q1<0) continue;
+                cp1=sdobs(obs,iu[i],ir[i],p0,q0,1);
+                cp2=sdobs(obs,iu[i],ir[i],p1,q1,1);
+                pr1=sdobs(obs,iu[i],ir[i],p0,q0,0);
+                pr2=sdobs(obs,iu[i],ir[i],p1,q1,0);
+                freq1=sat2freq(sat[i],obs[iu[i]].code[p0],nav);
+                freq2=sat2freq(sat[i],obs[iu[i]].code[p1],nav);
                 if (cp1==0.0||cp2==0.0||pr1==0.0||pr2==0.0||freq1==0.0||freq2<=0.0) continue;
                 
                 C1= SQR(freq1)/(SQR(freq1)-SQR(freq2));
@@ -842,39 +909,50 @@ static void zdres_sat(int base, double r, const obsd_t *obs, const nav_t *nav,
                       const prcopt_t *opt, double *y, double *freq)
 {
     double freq1,freq2,C1,C2,dant_if;
-    int i,nf=NF(opt);
+    int i,j,nf=NF(opt),sys=satsys(obs->sat,NULL);
     
     if (opt->ionoopt==IONOOPT_IFLC) { /* iono-free linear combination */
-        freq1=sat2freq(obs->sat,obs->code[0],nav);
-        freq2=sat2freq(obs->sat,obs->code[1],nav);
+        int p0=selfreqidx(obs,opt->nf,0,opt->freqopt);
+        int p1=selfreqidx(obs,opt->nf,1,opt->freqopt);
+        int b0,b1;
+        if (p0<0||p1<0) return;
+        freq1=sat2freq(obs->sat,obs->code[p0],nav);
+        freq2=sat2freq(obs->sat,obs->code[p1],nav);
         if (freq1==0.0||freq2==0.0) return;
         
-        if (testsnr(base,0,azel[1],obs->SNR[0]*SNR_UNIT,&opt->snrmask)||
-            testsnr(base,1,azel[1],obs->SNR[1]*SNR_UNIT,&opt->snrmask)) return;
+        if (testsnr(base,0,azel[1],obs->SNR[p0]*SNR_UNIT,&opt->snrmask)||
+            testsnr(base,1,azel[1],obs->SNR[p1]*SNR_UNIT,&opt->snrmask)) return;
         
         C1= SQR(freq1)/(SQR(freq1)-SQR(freq2));
         C2=-SQR(freq2)/(SQR(freq1)-SQR(freq2));
-        dant_if=C1*dant[0]+C2*dant[1];
+        b0=code2idx(sys,obs->code[p0]);
+        b1=code2idx(sys,obs->code[p1]);
+        if (b0<0||b0>=NFREQ||b1<0||b1>=NFREQ) return;
+        dant_if=C1*dant[b0]+C2*dant[b1];
         
-        if (obs->L[0]!=0.0&&obs->L[1]!=0.0) {
-            y[0]=C1*obs->L[0]*CLIGHT/freq1+C2*obs->L[1]*CLIGHT/freq2-r-dant_if;
+        if (obs->L[p0]!=0.0&&obs->L[p1]!=0.0) {
+            y[0]=C1*obs->L[p0]*CLIGHT/freq1+C2*obs->L[p1]*CLIGHT/freq2-r-dant_if;
         }
-        if (obs->P[0]!=0.0&&obs->P[1]!=0.0) {
-            y[1]=C1*obs->P[0]+C2*obs->P[1]-r-dant_if;
+        if (obs->P[p0]!=0.0&&obs->P[p1]!=0.0) {
+            y[1]=C1*obs->P[p0]+C2*obs->P[p1]-r-dant_if;
         }
         freq[0]=1.0;
     }
     else {
         for (i=0;i<nf;i++) {
-            if ((freq[i]=sat2freq(obs->sat,obs->code[i],nav))==0.0) continue;
+            int p=selfreqidx(obs,opt->nf,i,opt->freqopt);
+            if (p<0) continue;
+            if ((freq[i]=sat2freq(obs->sat,obs->code[p],nav))==0.0) continue;
             
             /* check SNR mask */
-            if (testsnr(base,i,azel[1],obs->SNR[i]*SNR_UNIT,&opt->snrmask)) {
+            if (testsnr(base,i,azel[1],obs->SNR[p]*SNR_UNIT,&opt->snrmask)) {
                 continue;
             }
             /* residuals = observable - pseudorange */
-            if (obs->L[i]!=0.0) y[i   ]=obs->L[i]*CLIGHT/freq[i]-r-dant[i];
-            if (obs->P[i]!=0.0) y[i+nf]=obs->P[i]               -r-dant[i];
+            j=code2idx(sys,obs->code[p]);
+            if (j<0||j>=NFREQ) continue;
+            if (obs->L[p]!=0.0) y[i   ]=obs->L[p]*CLIGHT/freq[i]-r-dant[j];
+            if (obs->P[p]!=0.0) y[i+nf]=obs->P[p]               -r-dant[j];
         }
     }
 }
@@ -2566,14 +2644,16 @@ static int relpos(rtk_t *rtk, const obsd_t *obs, int nu, int nr,
         rtk->nfix=0;
     }
     for (i=0;i<n;i++) for (j=0;j<nf;j++) {
-        if (obs[i].L[j]==0.0) continue;
+        int p=selfreqidx(obs+i,opt->nf,j,opt->freqopt);
+        if (p<0||obs[i].L[p]==0.0) continue;
         rtk->ssat[obs[i].sat-1].pt[obs[i].rcv-1][j]=obs[i].time;
-        rtk->ssat[obs[i].sat-1].ph[obs[i].rcv-1][j]=obs[i].L[j];
+        rtk->ssat[obs[i].sat-1].ph[obs[i].rcv-1][j]=obs[i].L[p];
     }
     for (i=0;i<ns;i++) for (j=0;j<nf;j++) {
+        int p=selfreqidx(obs+iu[i],opt->nf,j,opt->freqopt);
         
         /* output snr of rover receiver */
-        rtk->ssat[sat[i]-1].snr[j]=obs[iu[i]].SNR[j];
+        if (p>=0) rtk->ssat[sat[i]-1].snr[j]=obs[iu[i]].SNR[p];
     }
     for (i=0;i<MAXSAT;i++) for (j=0;j<nf;j++) {
         if (rtk->ssat[i].fix[j]==2&&stat!=SOLQ_FIX) rtk->ssat[i].fix[j]=1;

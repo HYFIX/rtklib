@@ -1016,7 +1016,7 @@ typedef struct {        /* processing options type */
     int  posopt[6];     /* positioning options */
     int  syncsol;       /* solution sync mode (0:off,1:on) */
     double odisp[2][6*11]; /* ocean tide loading parameters {rov,base} */
-    int  freqopt;       /* disable L2-AR */
+    int  freqopt;       /* alternate RTK frequency plan */
     char pppopt[256];   /* ppp option */
     gtime_t tr;         /* approximate time for rtcm */
 } prcopt_t;
@@ -1359,6 +1359,7 @@ EXPORT int  testsnr(int base, int freq, double el, double snr,
 EXPORT void setcodepri(int sys, int idx, const char *pri);
 EXPORT int  getcodepri(int sys, uint8_t code, const char *opt);
 EXPORT int  get_glo_fcn_default(int prn);
+EXPORT void set_glo_fcn(int prn, int fcn); /* run time frequency channel number (from the broadcast ephemeris) */
 /* matrix and vector functions -----------------------------------------------*/
 EXPORT double *mat  (int n, int m);
 EXPORT int    *imat (int n, int m);
@@ -1750,6 +1751,8 @@ EXPORT void strsetproxy(const char *addr);
 /* integer ambiguity resolution ----------------------------------------------*/
 EXPORT int lambda(int n, int m, const double *a, const double *Q, double *F,
                   double *s);
+EXPORT int lambda_ex(int n, int m, const double *a, const double *Q, double *F,
+                     double *s, double *Ps_ib);
 EXPORT int lambda_reduction(int n, const double *Q, double *Z);
 EXPORT int lambda_search(int n, int m, const double *a, const double *Q,
                          double *F, double *s);

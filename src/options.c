@@ -45,7 +45,7 @@ extern int bie_ar;
 /* system options table ------------------------------------------------------*/
 #define SWTOPT  "0:off,1:on"
 #define MODOPT  "0:single,1:dgps,2:kinematic,3:static,4:movingbase,5:fixed,6:ppp-kine,7:ppp-static,8:ppp-fixed"
-#define FRQOPT  "1:l1,2:l1+2,3:l1+2+3,4:l1+2+3+4,5:l1+2+3+4+5"
+#define FRQOPT  "1:l1,2:l1+2,3:l1+2+3,4:l1+2+3+4,5:l1+2+3+4+5,6:l1+2+3+4+5+6,7:l1+5"
 #define TYPOPT  "0:forward,1:backward,2:combined"
 #define IONOPT  "0:off,1:brdc,2:sbas,3:dual-freq,4:est-stec,5:ionex-tec,6:qzs-brdc"
 #define TRPOPT  "0:off,1:saas,2:sbas,3:est-ztd,4:est-ztdgrad"
@@ -430,9 +430,10 @@ static void buff2sysopts(void)
             prcopt_.snrmask.mask[i][j++]=atof(p);
         }
     }
-    /* number of frequency (4:L1+L5) */
-    if (prcopt_.nf==4) {
-        prcopt_.nf=3;
+    /* alternate dual-frequency constellation plan (7:L1+L5) */
+    prcopt_.freqopt=0;
+    if (prcopt_.nf==7) {
+        prcopt_.nf=2;
         prcopt_.freqopt=1;
     }
 }
@@ -477,9 +478,8 @@ static void sysopts2buff(void)
             p+=sprintf(p,"%s%.0f",j>0?",":"",prcopt_.snrmask.mask[i][j]);
         }
     }
-    /* number of frequency (4:L1+L5) */
-    if (prcopt_.nf==3&&prcopt_.freqopt==1) {
-        prcopt_.nf=4;
+    if (prcopt_.nf==2&&prcopt_.freqopt==1) {
+        prcopt_.nf=7;
         prcopt_.freqopt=0;
     }
 }

@@ -162,10 +162,10 @@ static int search(int n, int m, const double *L, const double *D,
 * return : status (0:ok,other:error)
 * notes  : matrix stored by column-major order (fortran convension)
 *-----------------------------------------------------------------------------*/
-extern int lambda(int n, int m, const double *a, const double *Q, double *F,
-                  double *s)
+extern int lambda_ex(int n, int m, const double *a, const double *Q, double *F,
+                      double *s, double *Ps_ib)
 {
-    int info;
+    int i, info;
     double *L,*D,*Z,*z,*E;
     
     if (n<=0||m<=0) return -1;
@@ -178,6 +178,21 @@ extern int lambda(int n, int m, const double *a, const double *Q, double *F,
         reduction(n,L,D,Z);
         matmul("TN",n,1,n,1.0,Z,a,0.0,z); /* z=Z'*a */
         
+        /* calculate integer bootstrapping success rate Ps_ib */
+        if (Ps_ib) {
+            double ps = 1.0;
+            for (i=0; i<n; i++) {
+                if (D[i] > 1e-12) {
+                    /* erf(1 / (2 * sqrt(2 * D[i]))) */
+                    double arg = 1.0 / (2.0 * sqrt(2.0 * D[i]));
+                    ps *= erf(arg);
+                } else {
+                    ps *= 0.0;
+                }
+            }
+            *Ps_ib = (ps > 1.0) ? 1.0 : (ps < 0.0 ? 0.0 : ps);
+        }
+        
         /* mlambda search */
         if (!(info=search(n,m,L,D,z,E,s))) {
             
@@ -186,6 +201,12 @@ extern int lambda(int n, int m, const double *a, const double *Q, double *F,
     }
     free(L); free(D); free(Z); free(z); free(E);
     return info;
+}
+
+extern int lambda(int n, int m, const double *a, const double *Q, double *F,
+                  double *s)
+{
+    return lambda_ex(n, m, a, Q, F, s, NULL);
 }
 /* lambda reduction ------------------------------------------------------------
 * reduction by lambda (ref [1]) for integer least square
