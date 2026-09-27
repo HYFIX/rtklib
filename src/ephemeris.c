@@ -606,7 +606,7 @@ static int satpos_ssr(gtime_t time, gtime_t teph, int sat, const nav_t *nav,
 {
     const ssr_t *ssr;
     eph_t *eph;
-    double t1,t2,t3,er[3],ea[3],ec[3],rc[3],deph[3],dclk,dant[3]={0},tk;
+    double t1,t2,t3,tg1,tg2,er[3],ea[3],ec[3],rc[3],deph[3],dclk,dant[3]={0},tk;
     int i,sys,iode;
 
     trace(4,"satpos_ssr: time=%s sat=%2d\n",time_str(time,3),sat);
@@ -652,11 +652,24 @@ static int satpos_ssr(gtime_t time, gtime_t teph, int sat, const nav_t *nav,
     t1=timediff(time,ssr->t0[0]);
     t2=timediff(time,ssr->t0[1]);
     t3=timediff(time,ssr->t0[2]);
-    
-    /* ssr orbit and clock correction (ref [4]) */
-    if (fabs(t1)>MAXAGESSR||fabs(t2)>MAXAGESSR) {
+
+    /* ssr orbit and clock correction (ref [4]).
+     * the staleness gate is anchored to teph, not time: teph is the
+     * caller's fixed "ephemeris/correction selection instant" (see
+     * ephpos()'s own seleph()/selgeph() calls a few lines below, which
+     * already use teph for exactly this reason), while time is only the
+     * instant the position/clock is actually being evaluated at. Gating
+     * on time instead meant a caller evaluating several nearby instants
+     * from one fixed selection (e.g. a numerical-derivative stencil) could
+     * see this same correction accepted at teph but rejected at
+     * time=teph+/-a few seconds whenever teph sits within MAXAGESSR of
+     * that boundary, i.e. the same correction record passing or failing
+     * depending on which nearby instant happened to be asked for. */
+    tg1=timediff(teph,ssr->t0[0]);
+    tg2=timediff(teph,ssr->t0[1]);
+    if (fabs(tg1)>MAXAGESSR||fabs(tg2)>MAXAGESSR) {
         trace(2,"age of ssr error: %s sat=%2d t=%.0f %.0f\n",time_str(time,0),
-              sat,t1,t2);
+              sat,tg1,tg2);
         *svh=-1;
         return 0;
     }
