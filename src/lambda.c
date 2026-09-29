@@ -39,7 +39,9 @@ static int LD(int n, const double *Q, double *L, double *D)
         for (j=0;j<=i;j++) L[i+j*n]/=L[i+i*n];
     }
     free(A);
+#ifdef _DEBUG
     if (info) fprintf(stderr,"%s : LD factorization error\n",__FILE__);
+#endif
     return info;
 }
 /* integer gauss transformation ----------------------------------------------*/
