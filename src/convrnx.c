@@ -1293,6 +1293,7 @@ static int convrnx_s(int sess, int format, rnxopt_t *opt, const char *file,
         return 0;
     }
     str->time=str->tstart;
+    str->obs->n=0;
     
     for (i=0;i<nf&&!abort;i++) {
         if (!mask[i]) continue;
