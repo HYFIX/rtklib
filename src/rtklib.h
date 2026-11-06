@@ -356,6 +356,7 @@ extern "C" {
 #define CODE_L4A    66                  /* obs code: G1aL1OCd   (GLO) */
 #define CODE_L4B    67                  /* obs code: G1aL1OCd   (GLO) */
 #define CODE_L4X    68                  /* obs code: G1al1OCd+p (GLO) */
+#define MAXAGESSR_BIAS 600.0            /* max age of ssr code/phase bias (s) */
 #define MAXCODE     68                  /* max number of obs code */
 
 #define PMODE_SINGLE 0                  /* positioning mode: single */
@@ -775,6 +776,7 @@ typedef struct {        /* SSR correction type */
     int iod[6];         /* iod ssr {eph,clk,hrclk,ura,bias,pbias} */
     int iode;           /* issue of data */
     int iodcrc;         /* issue of data crc for beidou/sbas */
+    uint8_t bds_toe_valid; /* iodcrc contains BDS DF470 toe modulo */
     int ura;            /* URA indicator */
     int refd;           /* sat ref datum (0:ITRF,1:regional) */
     double deph [3];    /* delta orbit {radial,along,cross} (m) */
@@ -784,6 +786,9 @@ typedef struct {        /* SSR correction type */
     float  cbias[MAXCODE]; /* code biases (m) */
     double pbias[MAXCODE]; /* phase biases (m) */
     float  stdpb[MAXCODE]; /* std-dev of phase biases (m) */
+    uint8_t pbias_sii[MAXCODE]; /* phase-bias integer indicator */
+    uint8_t pbias_swl[MAXCODE]; /* phase-bias WL integer indicator */
+    uint8_t pbias_sdc[MAXCODE]; /* phase-bias discontinuity counter */
     double yaw_ang,yaw_rate; /* yaw angle and yaw rate (deg,deg/s) */
     uint8_t update;     /* update flag (0:no update,1:update) */
 } ssr_t;
@@ -1114,6 +1119,8 @@ typedef struct {        /* satellite status type */
     uint32_t outc [NFREQ]; /* obs outage counter of phase */
     uint32_t slipc[NFREQ]; /* cycle-slip counter */
     uint32_t rejc [NFREQ]; /* reject counter */
+    uint8_t pbias_sdc[NFREQ]; /* last SSR phase-bias discontinuity counter */
+    uint8_t pbias_sdc_valid[NFREQ]; /* SSR discontinuity counter valid flag */
     double gf[NFREQ-1]; /* geometry-free phase (m) */
     double mw[NFREQ-1]; /* MW-LC (m) */
     double phw;         /* phase windup (cycle) */

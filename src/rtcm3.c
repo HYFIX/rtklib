@@ -1678,8 +1678,9 @@ static int decode_ssr1(rtcm_t *rtcm, int sys, int subtype)
         rtcm->ssr[sat-1].t0 [0]=rtcm->time;
         rtcm->ssr[sat-1].udi[0]=udint;
         rtcm->ssr[sat-1].iod[0]=iod;
-        rtcm->ssr[sat-1].iode=iode;     /* SBAS/BDS: toe/t0 modulo */
-        rtcm->ssr[sat-1].iodcrc=iodcrc; /* SBAS/BDS: IOD CRC */
+        rtcm->ssr[sat-1].iode=iode;     /* BDS: DF471 IOD */
+        rtcm->ssr[sat-1].iodcrc=iodcrc; /* BDS: DF470 toe modulo */
+        rtcm->ssr[sat-1].bds_toe_valid=(uint8_t)(sys==SYS_CMP&&subtype==0);
         rtcm->ssr[sat-1].refd=refd;
         
         for (k=0;k<3;k++) {
@@ -1862,6 +1863,7 @@ static int decode_ssr4(rtcm_t *rtcm, int sys, int subtype)
         rtcm->ssr[sat-1].iod[0]=rtcm->ssr[sat-1].iod[1]=iod;
         rtcm->ssr[sat-1].iode=iode;
         rtcm->ssr[sat-1].iodcrc=iodcrc;
+        rtcm->ssr[sat-1].bds_toe_valid=(uint8_t)(sys==SYS_CMP&&subtype==0);
         rtcm->ssr[sat-1].refd=refd;
         
         for (k=0;k<3;k++) {
@@ -2001,6 +2003,7 @@ static int decode_ssr7(rtcm_t *rtcm, int sys, int subtype)
 {
     const uint8_t *sigs;
     double udint,bias,std=0.0,pbias[MAXCODE],stdpb[MAXCODE];
+    uint8_t pbias_sii[MAXCODE],pbias_swl[MAXCODE],pbias_sdc[MAXCODE];
     int i,j,k,type,mode,sync,iod,nsat,prn,sat,nbias,np,mw,offp,sii,swl;
     int dispe,sdc,yaw_ang,yaw_rate;
     
@@ -2030,7 +2033,15 @@ static int decode_ssr7(rtcm_t *rtcm, int sys, int subtype)
         yaw_ang =getbitu(rtcm->buff,i, 9);      i+= 9;
         yaw_rate=getbits(rtcm->buff,i, 8);      i+= 8;
         
-        for (k=0;k<MAXCODE;k++) pbias[k]=stdpb[k]=0.0;
+        sat=satno(sys,prn);
+        for (k=0;k<MAXCODE;k++) {
+            pbias[k]=stdpb[k]=0.0;
+            /* keep last indicators for signals absent from this message
+             * so a missing signal is not seen as a discontinuity */
+            pbias_sii[k]=sat?rtcm->ssr[sat-1].pbias_sii[k]:0;
+            pbias_swl[k]=sat?rtcm->ssr[sat-1].pbias_swl[k]:0;
+            pbias_sdc[k]=sat?rtcm->ssr[sat-1].pbias_sdc[k]:0;
+        }
         for (k=0;k<nbias&&i+32<=rtcm->len*8;k++) {
             mode=getbitu(rtcm->buff,i, 5); i+= 5;
             sii =getbitu(rtcm->buff,i, 1); i+= 1; /* integer-indicator */
@@ -2041,12 +2052,15 @@ static int decode_ssr7(rtcm_t *rtcm, int sys, int subtype)
             if (sigs[mode]) {
                 pbias[sigs[mode]-1]=bias*0.0001; /* (m) */
                 stdpb[sigs[mode]-1]=std *0.0001; /* (m) */
+                pbias_sii[sigs[mode]-1]=(uint8_t)sii;
+                pbias_swl[sigs[mode]-1]=(uint8_t)swl;
+                pbias_sdc[sigs[mode]-1]=(uint8_t)sdc;
             }
             else {
                 trace(2,"rtcm3 %d not supported mode: mode=%d\n",type,mode);
             }
         }
-        if (!(sat=satno(sys,prn))) {
+        if (!sat) {
             trace(2,"rtcm3 %d satellite number error: prn=%d\n",type,prn);
             continue;
         }
@@ -2059,7 +2073,11 @@ static int decode_ssr7(rtcm_t *rtcm, int sys, int subtype)
         for (k=0;k<MAXCODE;k++) {
             rtcm->ssr[sat-1].pbias[k]=pbias[k];
             rtcm->ssr[sat-1].stdpb[k]=(float)stdpb[k];
+            rtcm->ssr[sat-1].pbias_sii[k]=pbias_sii[k];
+            rtcm->ssr[sat-1].pbias_swl[k]=pbias_swl[k];
+            rtcm->ssr[sat-1].pbias_sdc[k]=pbias_sdc[k];
         }
+        rtcm->ssr[sat-1].update=1;
     }
     return 20;
 }

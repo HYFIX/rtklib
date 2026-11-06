@@ -614,25 +614,7 @@ static int satpos_ssr(gtime_t time, gtime_t teph, int sat, const nav_t *nav,
     ssr=nav->ssr+sat-1;
     sys=satsys(sat,NULL);
 
-    /* RTCM3 SSR's per-satellite "IODE" field for BDS is NOT the broadcast
-     * ephemeris's own IODE - BDS's real IODE-equivalent (AODE) is a separate
-     * 5-bit field, too coarse to reliably identify one ephemeris, so the SSR
-     * spec substitutes a toe-modulo-derived value here instead and adds a
-     * distinct 24-bit iodcrc (an actual ephemeris CRC) as the real matching
-     * key. rtcm3.c decodes iodcrc into ssr_t.iodcrc but nothing in this file
-     * ever applies it: seleph()/ephpos() below compare eph->iode (AODE, 0-31)
-     * directly against ssr->iode (the mismatched toe-modulo value), which can
-     * essentially never coincide - confirmed on real data (BDS C01, one full
-     * hour: broadcast AODE constant at 1, ssr->iode cycling 13/14/... every
-     * update, never matching). The practical effect is silent: every BDS
-     * satellite fails this exact-IODE match and never gets to use its SSR
-     * correction regardless of freshness, degrading to broadcast-only
-     * accuracy for the whole constellation. Until proper iodcrc-based
-     * matching is implemented, fall back to seleph()'s own nearest-toe
-     * selection (iode<0) for BDS specifically - the same "no exact IODE
-     * match available" fallback SBAS already uses unconditionally via
-     * selseph() (no iode parameter at all). */
-    iode = (sys==SYS_CMP) ? -1 : ssr->iode;
+    iode=ssr->iode;
     
     if (!ssr->t0[0].time) {
         trace(2,"no ssr orbit correction: %s sat=%2d\n",time_str(time,0),sat);
@@ -672,6 +654,21 @@ static int satpos_ssr(gtime_t time, gtime_t teph, int sat, const nav_t *nav,
               sat,tg1,tg2);
         *svh=-1;
         return 0;
+    }
+    /* BDS SSR identifies its broadcast ephemeris with DF471 (IOD) and DF470
+     * (toe modulo). The broadcast eph iode is AODE and is not the SSR key. */
+    if (sys==SYS_CMP) {
+        int iod,toemod;
+        if (!(eph=seleph(teph,sat,-1,nav))) return 0;
+        iod=((int)(time2bdt(gpst2bdt(eph->toc),NULL)/720.0))%240;
+        toemod=((int)(eph->toes/8.0))&0x3FF;
+        if (iod!=ssr->iode||(ssr->bds_toe_valid&&toemod!=ssr->iodcrc)) {
+            trace(2,"BDS SSR ephemeris mismatch: %s sat=%2d iod=%d/%d toe=%d/%d\n",
+                  time_str(time,0),sat,iod,ssr->iode,toemod,ssr->iodcrc);
+            *svh=-1;
+            return 0;
+        }
+        iode=-1; /* already validated against the selected BDS ephemeris */
     }
     if (ssr->udi[0]>=1.0) t1-=ssr->udi[0]/2.0;
     if (ssr->udi[1]>=1.0) t2-=ssr->udi[1]/2.0;

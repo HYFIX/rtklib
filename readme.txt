@@ -439,3 +439,14 @@ UPDATE HISTORY
    BUILD:
       ignore build/ and log/ output directories in .gitignore
 
+
+2026/11/06  HYFIX fork  fix: SSR phase-bias PPP-AR review fixes
+                        - ppp: apply SSR code bias only with SSR ephemeris
+                          option and only when the pseudorange is present
+                        - ppp_ar: exact fit (best residual 0) no longer
+                          rejected by the ratio test
+                        - rtcm3: SSR7 keeps last integer/discontinuity
+                          indicators for signals absent from a message
+                          (no spurious ambiguity resets)
+                        - ephemeris: BDS SSR IOD computed on BDT time scale
+                        - rtklib.h: shared MAXAGESSR_BIAS (ssr bias max age)

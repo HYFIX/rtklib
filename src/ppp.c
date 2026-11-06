@@ -384,6 +384,14 @@ static void corr_meas(const obsd_t *obs, const nav_t *nav, const double *azel,
         /* antenna phase center and phase windup correction */
         L[i]=obs->L[i]*CLIGHT/freq[i]-dants[i]-dantr[i]-phw*CLIGHT/freq[i];
         P[i]=obs->P[i]-dants[i]-dantr[i];
+
+        /* SSR observable-specific code bias */
+        if ((opt->sateph==EPHOPT_SSRAPC||opt->sateph==EPHOPT_SSRCOM)&&
+            obs->P[i]!=0.0&&obs->code[i]>0&&nav->ssr[obs->sat-1].t0[4].time&&
+            fabs(timediff(obs->time,nav->ssr[obs->sat-1].t0[4]))<
+            MAXAGESSR_BIAS) {
+            P[i]+=nav->ssr[obs->sat-1].cbias[obs->code[i]-1];
+        }
         
         /* P1-C1,P2-C2 dcb correction (C1->P1,C2->P2) */
         if (sys==SYS_GPS||sys==SYS_GLO) {
@@ -665,6 +673,20 @@ static void udbias_ppp(rtk_t *rtk, const obsd_t *obs, int n, const nav_t *nav)
     
     /* detect slip by Melbourne-Wubbena linear combination jump */
     detslp_mw(rtk,obs,n,nav);
+
+    /* An SSR phase-bias discontinuity starts a new integer ambiguity arc. */
+    for (i=0;i<n&&i<MAXOBS;i++) for (f=0;f<rtk->opt.nf&&f<NFREQ;f++) {
+        const ssr_t *ssr=nav->ssr+obs[i].sat-1;
+        uint8_t code=obs[i].code[f];
+        if (!code||!ssr->t0[5].time||
+            fabs(timediff(obs[i].time,ssr->t0[5]))>=MAXAGESSR_BIAS) continue;
+        if (rtk->ssat[obs[i].sat-1].pbias_sdc_valid[f]&&
+            rtk->ssat[obs[i].sat-1].pbias_sdc[f]!=ssr->pbias_sdc[code-1]) {
+            rtk->ssat[obs[i].sat-1].slip[f]=1;
+        }
+        rtk->ssat[obs[i].sat-1].pbias_sdc[f]=ssr->pbias_sdc[code-1];
+        rtk->ssat[obs[i].sat-1].pbias_sdc_valid[f]=1;
+    }
     
     ecef2pos(rtk->sol.rr,pos);
     

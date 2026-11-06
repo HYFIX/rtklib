@@ -322,7 +322,10 @@ static void corr_phase_bias_ssr(obsd_t *obs, int n, const nav_t *nav)
     
     for (i=0;i<n;i++) for (j=0;j<NFREQ;j++) {
         code=obs[i].code[j];
-        
+        if (!code||!nav->ssr[obs[i].sat-1].t0[5].time||
+            fabs(timediff(obs[i].time,nav->ssr[obs[i].sat-1].t0[5]))>=MAXAGESSR_BIAS) {
+            continue;
+        }
         if ((freq=sat2freq(obs[i].sat,code,nav))==0.0) continue;
         
         /* correct phase bias (cyc) */

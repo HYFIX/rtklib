@@ -282,7 +282,7 @@ static void apply_message(geod_stream_t *s, int ret, nav_t *nav,
         for (i=0;i<3;i++) rtk->rb[i]=s->rtcm.sta.pos[i];
     }
     else if (ret==9) update_ionutc(nav,&s->rtcm.nav);
-    else if (ret==10) update_ssr(nav,&s->rtcm);
+    else if (ret==10||ret==20) update_ssr(nav,&s->rtcm);
 }
 
 static int select_next(geod_stream_t *streams, int n)

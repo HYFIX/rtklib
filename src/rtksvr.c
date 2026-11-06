@@ -411,7 +411,7 @@ static void update_svr(rtksvr_t *svr, int ret, obs_t *obs, nav_t *nav,
     else if (ret==7) { /* dgps correction */
         svr->nmsg[index][5]++;
     }
-    else if (ret==10) { /* ssr message */
+    else if (ret==10||ret==20) { /* ssr orbit/clock/bias or phase bias */
         update_ssr(svr,index);
     }
     else if (ret==-1) { /* error */
@@ -545,6 +545,10 @@ static void corr_phase_bias(obsd_t *obs, int n, const nav_t *nav)
     
     for (i=0;i<n;i++) for (j=0;j<NFREQ;j++) {
         code=obs[i].code[j];
+        if (!code||!nav->ssr[obs[i].sat-1].t0[5].time||
+            fabs(timediff(obs[i].time,nav->ssr[obs[i].sat-1].t0[5]))>=MAXAGESSR_BIAS) {
+            continue;
+        }
         if ((freq=sat2freq(obs[i].sat,code,nav))==0.0) continue;
         
         /* correct phase bias (cyc) */
