@@ -150,7 +150,23 @@ const char *msm_sig_sbs[32]={
     ""  ,""  ,""  ,""  ,""  ,""  ,""  ,""
 };
 const char *msm_sig_cmp[32]={
-    /* BeiDou: ref [17] table 3.5-108 */
+    /* BeiDou-2/3 MSM signal ID mapping (1-based sig = 1..32, ref [17] table 3.5-108):
+     *   sig  2.. 4: "2I","2Q","2X" -> B1I (1561.098 MHz: Data, Pilot, Combined)
+     *   sig  8..10: "6I","6Q","6X" -> B3I (1268.520 MHz: Data, Pilot, Combined)
+     *   sig 14..16: "7I","7Q","7X" -> B2b/B2I (1207.140 MHz: Data, Pilot, Combined)
+     *   sig 22..24: "5D","5P","5X" -> B2a (1176.450 MHz: Data, Pilot, Combined)
+     *   sig 25    : "7D"           -> B2b Data (alternative)
+     *   sig 30..32: "1D","1P","1X" -> B1C (1575.420 MHz: Data, Pilot, Combined)
+     *
+     * Note on BDS B2a "5X" vs. B2 ACE-BOC:
+     * - "5X" (sig 24) is the official RTCM standard assignment for B2a Combined
+     *   (Data 5D + Pilot 5P) at 1176.450 MHz (analogous to GPS L5 5X / GAL E5a 5X).
+     * - The full wideband B2 ACE-BOC(15,10) composite spans 1176.450-1207.140 MHz
+     *   (center 1191.795 MHz) and is designated "8X" (C8X/L8X) in RINEX 3.04+/4.00.
+     *   Because RTCM Table 3.5-108 left slots 18..20 unassigned (unlike Galileo
+     *   Table 3.5-99 where sig 20 = "8X"), receivers tracking wideband B2 ACE-BOC
+     *   map the composite observable into RTCM slot 24 ("5X").
+     */
     ""  ,"2I","2Q","2X",""  ,""  ,""  ,"6I","6Q","6X",""  ,""  ,
     ""  ,"7I","7Q","7X",""  ,""  ,""  ,""  ,""  ,"5D","5P","5X",
     "7D",""  ,""  ,""  ,""  ,"1D","1P","1X"
