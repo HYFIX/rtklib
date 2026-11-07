@@ -269,7 +269,9 @@ static char codepris[8][MAXFREQ][16]={  /* code priority for each freq-index */
     {"C"       ,"IQX"       ,""        ,""       ,""       ,""      ,""}, /* SBS */
     {"IQXDPAN" ,"IQXDPZ"    ,"DPX"     ,"IQXA"   ,"DPX"    ,""      ,""}, /* BDS */
     {"ABCX"    ,"ABCX"      ,""        ,""       ,""       ,""      ,""}, /* IRN */
-    {"X"       ,"X"         ,""        ,""       ,""       ,""      ,""}  /* LEO */
+    /* LEO/XONA code priority per frequency band (0:X1, 1:X5, 2:X6):
+     * Combined (X) > Pilot (Q/P) > Data (I/D) */
+    {"XQPDI"   ,"XQPDI"     ,"XQPDI"   ,"X"      ,""       ,""      ,""}  /* LEO */
 };
 static fatalfunc_t *fatalfunc=NULL; /* fatal callback function */
 
@@ -696,8 +698,10 @@ static int code2freq_LEO(uint8_t code, double *freq)
     char *obs=code2obs(code);
     
     switch (obs[0]) {
-        case '1': *freq=FREQX1; return 0; /* X1 */
-        case '5': *freq=FREQX5; return 1; /* X5 */
+        case '1': *freq=FREQX1; return 0; /* X1 (1593.32250 MHz: 1X, 1I, 1Q) */
+        case '5': *freq=FREQX5; return 1; /* X5 (1190.51625 MHz: 5X, 5I, 5Q) */
+        case '6': *freq=FREQ6;  return 2; /* X6 / C-band (6X, 6I, 6Q) */
+        case '8': *freq=FREQ8;  return 3; /* X1+X5 ACE-BOC Meta-Signal (8X) */
     }
     return -1;
 }

@@ -162,9 +162,28 @@ const char *msm_sig_irn[32]={
     ""  ,""  ,""  ,""  ,""  ,""  ,""  ,""
 };
 const char *msm_sig_leo[32]={
-    /* LEO/XONA data after 11/22/2025 */ 
-    "1X","5X",""  ,""  ,""  ,""  ,""  ,""  ,""  ,""  ,""  ,""  ,
-    ""  ,""  ,""  ,""  ,""  ,""  ,""  ,""  ,""  ,""  ,""  ,""  ,
+    /* LEO/XONA MSM signal ID mapping table (1-based sig = 1..32):
+     *
+     * - Version 1 (ver=1, original 4+28 bit split in DF395):
+     *   Only sig = 1..4 are addressable (4-bit signal mask + 28-bit PRN page):
+     *     sig  1: "1X" (Xona X1 Combined Data+Pilot, 1593.32250 MHz)
+     *     sig  2: "5X" (Xona X5 Combined Data+Pilot, 1190.51625 MHz)
+     *     sig  3: "1I" (Xona X1 Data channel)
+     *     sig  4: "1Q" (Xona X1 Pilot channel)
+     *
+     * - Version 2 (ver=2, expanded 24+8 bit split in DF395):
+     *   24-bit signal mask (sig = 1..24) + 8-bit PRN page (0..255 -> 16,384 SVIDs):
+     *     sig  1: "1X" (Xona X1 Combined)      sig  5: "5I" (Xona X5 Data channel)
+     *     sig  2: "5X" (Xona X5 Combined)      sig  6: "5Q" (Xona X5 Pilot channel)
+     *     sig  3: "1I" (Xona X1 Data channel)  sig  7: "6I" (Xona X6/C-band Data)
+     *     sig  4: "1Q" (Xona X1 Pilot channel) sig  8: "6Q" (Xona X6/C-band Pilot)
+     *                                          sig  9: "6X" (Xona X6/C-band Combined)
+     *     sig 22: "5I" (Standard RTCM MSM L5/E5a Data channel slot alias)
+     *     sig 23: "5Q" (Standard RTCM MSM L5/E5a Pilot channel slot alias)
+     *     sig 24: "5X" (Standard RTCM MSM L5/E5a Combined I+Q slot alias)
+     */
+    "1X","5X","1I","1Q","5I","5Q","6I","6Q","6X","8X",""  ,""  ,
+    ""  ,""  ,""  ,""  ,""  ,""  ,""  ,""  ,""  ,"5I","5Q","5X",
     ""  ,""  ,""  ,""  ,""  ,""  ,""  ,""
 };
 /* rtcm signal to rinex obs type */
@@ -394,7 +413,7 @@ static int decode_type1002(rtcm_t *rtcm)
             trace(2,"rtcm3 1002 satellite number error: prn=%d\n",prn);
             continue;
         }
-        tt=timediff(rtcm->obs.data[0].time,rtcm->time);
+        tt=(rtcm->obs.data&&rtcm->obs.n>0)?timediff(rtcm->obs.data[0].time,rtcm->time):0.0;
         if (rtcm->obsflag||fabs(tt)>1E-9) {
             rtcm->obs.n=rtcm->obsflag=0;
         }
@@ -453,7 +472,7 @@ static int decode_type1004(rtcm_t *rtcm)
             trace(2,"rtcm3 1004 satellite number error: sys=%d prn=%d\n",sys,prn);
             continue;
         }
-        tt=timediff(rtcm->obs.data[0].time,rtcm->time);
+        tt=(rtcm->obs.data&&rtcm->obs.n>0)?timediff(rtcm->obs.data[0].time,rtcm->time):0.0;
         if (rtcm->obsflag||fabs(tt)>1E-9) {
             rtcm->obs.n=rtcm->obsflag=0;
         }
@@ -706,7 +725,7 @@ static int decode_type1010(rtcm_t *rtcm)
         if (!rtcm->nav.glo_fcn[prn-1]) {
             rtcm->nav.glo_fcn[prn-1]=fcn-7+8; /* fcn+8 */
         }
-        tt=timediff(rtcm->obs.data[0].time,rtcm->time);
+        tt=(rtcm->obs.data&&rtcm->obs.n>0)?timediff(rtcm->obs.data[0].time,rtcm->time):0.0;
         if (rtcm->obsflag||fabs(tt)>1E-9) {
             rtcm->obs.n=rtcm->obsflag=0;
         }
@@ -763,7 +782,7 @@ static int decode_type1012(rtcm_t *rtcm)
         if (!rtcm->nav.glo_fcn[prn-1]) {
             rtcm->nav.glo_fcn[prn-1]=fcn-7+8; /* fcn+8 */
         }
-        tt=timediff(rtcm->obs.data[0].time,rtcm->time);
+        tt=(rtcm->obs.data&&rtcm->obs.n>0)?timediff(rtcm->obs.data[0].time,rtcm->time):0.0;
         if (rtcm->obsflag||fabs(tt)>1E-9) {
             rtcm->obs.n=rtcm->obsflag=0;
         }
@@ -2180,14 +2199,24 @@ static void save_msm_obs(rtcm_t *rtcm, int sys, msm_h_t *h, const double *r,
         if      (sys==SYS_QZS) prn+=MINPRNQZS-1;
         else if (sys==SYS_SBS) prn+=MINPRNSBS-1;
         else if (sys == SYS_LEO) {
+            /* Compute full LEO SVID from 64-satellite page index and 1..64 slot:
+             *   svid = page * 64 + sat_slot
+             * - Preserve legacy Pulsar-0 (XNA0018) mapping: SVID 249 (page=3, slot=57) -> PRN 18
+             * - For general Xona/LEO constellations (ver=2 8-bit page: SVIDs 1..16384):
+             *   map SVIDs 1..MAXPRNLEO directly to PRN 1..MAXPRNLEO, and fold higher SVIDs
+             *   into 1..MAXPRNLEO so multi-satellite passes across pages are retained. */
             svid=h->page*64+(h->sats[i]);
             if (svid==249)
                 prn=18;
+            else if (svid>=MINPRNLEO&&svid<=MAXPRNLEO)
+                prn=svid;
+            else if (svid>MAXPRNLEO&&MAXPRNLEO>0)
+                prn=((svid-1)%MAXPRNLEO)+1;
             else
-                prn= 0;
+                prn=0;
         }        
         if ((sat=satno(sys,prn))) {
-            tt=timediff(rtcm->obs.data[0].time,rtcm->time);
+            tt=(rtcm->obs.data&&rtcm->obs.n>0)?timediff(rtcm->obs.data[0].time,rtcm->time):0.0;
             if (rtcm->obsflag||fabs(tt)>1E-9) {
                 rtcm->obs.n=rtcm->obsflag=0;
             }
@@ -2267,10 +2296,16 @@ static int decode_msm_head(rtcm_t *rtcm, int sys, int *sync, int *iod,
     msm_h_t h0={0};
     double tow,tod;
     char *msg,tstr[64];
-    int i=24,j,dow,mask,staid,type,ncell=0;
+    int i=24,j,dow,mask,staid,type,ver=1,nsig_bits,npage_bits,ncell=0;
     
     type=getbitu(rtcm->buff,i,12); i+=12;
-    if (type==4045) i+= (3+9); /* skip the version and sub-type for LEO/XONA 4045 ID and sub-type 4,5,6,7 */
+    if (type==4045||type==4054) {
+        /* Read 3-bit message version (bits 36..38) and skip 9-bit subtype (bits 39..47):
+         *   ver = 1: Legacy 4-bit signal mask + 28-bit PRN page
+         *   ver = 2: Expanded 24-bit signal mask + 8-bit PRN page (24+8 option) */
+        ver=getbitu(rtcm->buff,i,3); i+=3;
+        i+=9;
+    }
     *h=h0;
     if (i+157<=rtcm->len*8) {
         staid     =getbitu(rtcm->buff,i,12);       i+=12;
@@ -2301,11 +2336,19 @@ static int decode_msm_head(rtcm_t *rtcm, int sys, int *sync, int *iod,
             if (mask) h->sats[h->nsat++]=j;
         }
         if (sys==SYS_LEO) {
-            for (j=1;j<=4;j++) {
+            /* RTCM 4045/4054 folds the 32-bit MSM Signal Mask field (DF395) into
+             * [Signal Mask | PRN Page] to expand LEO PRNs beyond 64:
+             * - ver <= 1 (original design): 4-bit Signal Mask (sig 1..4) + 28-bit Page
+             * - ver >= 2 (new 24+8 design): 24-bit Signal Mask (sig 1..24) + 8-bit Page
+             *   (8-bit page = 0..255 pages * 64 sats/page = 16,384 LEO SVIDs, while
+             *   unlocking 24 signal slots for separate X1/X5/X6 Data, Pilot, and Combined). */
+            nsig_bits =(ver>=2)?24:4;
+            npage_bits=32-nsig_bits;
+            for (j=1;j<=nsig_bits;j++) {
                 mask=getbitu(rtcm->buff,i,1); i+=1;
                 if (mask) h->sigs[h->nsig++]=j;
             }
-            h->page=getbitu(rtcm->buff,i,28); i+=28;
+            h->page=getbitu(rtcm->buff,i,npage_bits); i+=npage_bits;
         }
         else {
             h->page=0;
@@ -2767,12 +2810,10 @@ static int decode_type4045(rtcm_t *rtcm)
         sprintf(rtcm->msgtype+strlen(rtcm->msgtype)," ver=%d subtype=%3d",ver,
                 subtype);
     }
-    if (subtype<4||subtype>7)
-    {   
-        trace(2,"rtcm3 4045: unsupported message subtype=%d\n",subtype);
-	    return 0;
-    }
     switch (subtype) {
+        case   4: return decode_msm4(rtcm,SYS_LEO);
+        case   5: return decode_msm5(rtcm,SYS_LEO);
+        case   6: return decode_msm6(rtcm,SYS_LEO);
         case   7: return decode_msm7(rtcm,SYS_LEO);
     }
     trace(2,"rtcm3 4045: unsupported message subtype=%d\n",subtype);
@@ -2793,6 +2834,12 @@ static int decode_type4054(rtcm_t *rtcm)
     if (rtcm->outtype) {
         sprintf(rtcm->msgtype+strlen(rtcm->msgtype)," ver=%d subtype=%3d",ver,
                 subtype);
+    }
+    switch (subtype) {
+        case   4: return decode_msm4(rtcm,SYS_LEO);
+        case   5: return decode_msm5(rtcm,SYS_LEO);
+        case   6: return decode_msm6(rtcm,SYS_LEO);
+        case   7: return decode_msm7(rtcm,SYS_LEO);
     }
     trace(2,"rtcm3 4054: unsupported message subtype=%d\n",subtype);
     return 0;

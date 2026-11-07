@@ -135,7 +135,10 @@ extern "C" {
 #define NFREQGLO    2                   /* number of carrier frequencies of GLONASS */
 
 #ifndef NEXOBS
-#define NEXOBS      0                   /* number of extended obs codes */
+/* Allow up to 3 extended observation codes per frequency band so simultaneous
+ * Combined (e.g. 5X), Pilot (5Q), and Data (5I) signals from RTCM 4045/4054
+ * ver=2 (or standard GNSS MSM7) are all retained in obsd_t. */
+#define NEXOBS      5                   /* number of extended obs codes */
 #endif
 
 #define SNR_UNIT    0.001               /* SNR unit (dBHz) */
