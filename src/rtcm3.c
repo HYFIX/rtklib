@@ -913,6 +913,31 @@ static int decode_type1019(rtcm_t *rtcm)
     rtcm->ephset=0;
     return 2;
 }
+/* reference time to resolve day of GLONASS time-of-day -----------------------
+* 1020 carries only the time of day, so the date is chosen within +-12 h of a
+* reference time. rtcm->time is only the approximated time given by the user
+* until an observation epoch is decoded, and in a navigation-only stream it
+* never advances. Ephemeris epochs in the stream (GPS/GAL/BDS toe, previous
+* GLONASS tof) are always within a few hours of the true time, so the newest
+* of them is preferred. rtcm->time is the fallback when none is available.
+*-----------------------------------------------------------------------------*/
+static gtime_t glo_ref_time(const rtcm_t *rtcm)
+{
+    gtime_t ref={0};
+    int i;
+    
+    for (i=0;i<rtcm->nav.n;i++) {
+        if (rtcm->nav.eph[i].toe.time==0) continue;
+        if (ref.time==0||timediff(rtcm->nav.eph[i].toe,ref)>0.0) ref=rtcm->nav.eph[i].toe;
+    }
+    if (ref.time!=0) return ref; /* gpst */
+    
+    for (i=0;i<rtcm->nav.ng;i++) {
+        if (rtcm->nav.geph[i].tof.time==0) continue;
+        if (ref.time==0||timediff(rtcm->nav.geph[i].tof,ref)>0.0) ref=rtcm->nav.geph[i].tof;
+    }
+    return ref.time!=0?ref:rtcm->time;
+}
 /* decode type 1020: GLONASS ephemerides -------------------------------------*/
 static int decode_type1020(rtcm_t *rtcm)
 {
@@ -962,7 +987,7 @@ static int decode_type1020(rtcm_t *rtcm)
     geph.svh=bn;
     geph.iode=tb&0x7F;
     if (rtcm->time.time==0) rtcm->time=utc2gpst(timeget());
-    tow=time2gpst(gpst2utc(rtcm->time),&week);
+    tow=time2gpst(gpst2utc(glo_ref_time(rtcm)),&week);
     tod=fmod(tow,86400.0); tow-=tod;
     tof=tk_h*3600.0+tk_m*60.0+tk_s-10800.0; /* lt->utc */
     if      (tof<tod-43200.0) tof+=86400.0;

@@ -7,7 +7,7 @@ LDLIBS = -lm -llapack -lblas
 CC = gcc
 
 BIN    = t_matrix t_time t_coord t_rinex t_lambda t_atmos t_misc t_preceph t_gloeph \
-t_geoid t_ppp t_ionex t_tle
+t_geoid t_ppp t_ionex t_tle t_rtcm3
 
 all        : $(BIN)
 t_matrix   : t_matrix.o rtkcmn.o preceph.o
@@ -24,6 +24,8 @@ t_ppp      : t_ppp.o rtkcmn.o ephemeris.o preceph.o sbas.o ionex.o pntpos.o ppp.
 t_ppp      : lambda.o
 t_ionex    : t_ionex.o rtkcmn.o preceph.o ionex.o
 t_tle      : t_tle.o rtkcmn.o rinex.o ephemeris.o sbas.o preceph.o tle.o
+t_rtcm3    : t_rtcm3.o rtcm.o rtcm2.o rtcm3.o rtcm3e.o rtkcmn.o preceph.o rinex.o
+t_rtcm3    : ephemeris.o sbas.o pntpos.o ionex.o
 
 rtkcmn.o   : $(SRC)/rtklib.h $(SRC)/rtkcmn.c
 	$(CC) -c $(CFLAGS) $(SRC)/rtkcmn.c
@@ -45,6 +47,14 @@ ppp.o      : $(SRC)/rtklib.h $(SRC)/ppp.c
 	$(CC) -c $(CFLAGS) $(SRC)/ppp.c
 ppp_ar.o   : $(SRC)/rtklib.h $(SRC)/ppp_ar.c
 	$(CC) -c $(CFLAGS) $(SRC)/ppp_ar.c
+rtcm.o     : $(SRC)/rtklib.h $(SRC)/rtcm.c
+	$(CC) -c $(CFLAGS) $(SRC)/rtcm.c
+rtcm2.o    : $(SRC)/rtklib.h $(SRC)/rtcm2.c
+	$(CC) -c $(CFLAGS) $(SRC)/rtcm2.c
+rtcm3.o    : $(SRC)/rtklib.h $(SRC)/rtcm3.c
+	$(CC) -c $(CFLAGS) $(SRC)/rtcm3.c
+rtcm3e.o   : $(SRC)/rtklib.h $(SRC)/rtcm3e.c
+	$(CC) -c $(CFLAGS) $(SRC)/rtcm3e.c
 pntpos.o   : $(SRC)/rtklib.h $(SRC)/pntpos.c
 	$(CC) -c $(CFLAGS) $(SRC)/pntpos.c
 ionex.o    : $(SRC)/rtklib.h $(SRC)/ionex.c
