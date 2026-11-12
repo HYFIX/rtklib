@@ -44,6 +44,10 @@
 *                           update MSM signal ID table (ref [17])
 *                           update SSR signal and tracking mode ID table
 *                           add week adjustment in MT1019,1044,1045,1046,1042
+*           2026/11/12 1.23 add nav message time tag rtcm_t.tnav (updated by obs
+*                           time and by eph time if differs over tolerance)
+*                           fix GLONASS eph date in RTCM3 file without obs
+*                           check range of tk,tb in MT1020
 *                           use API code2idx() to get freq-index
 *                           use API code2freq() to get carrier frequency
 *                           use integer types in stdint.h
@@ -52,6 +56,7 @@
 
 /* constants -----------------------------------------------------------------*/
 
+#define TTOL_NAV    21600.0     /* tolerance of nav time tag by eph time (s) */
 #define PRUNIT_GPS  299792.458  /* rtcm ver.3 unit of gps pseudorange (m) */
 #define PRUNIT_GLO  599584.916  /* rtcm ver.3 unit of glonass pseudorange (m) */
 #define RANGE_MS    (CLIGHT*0.001)      /* range in 1 ms */
@@ -273,6 +278,24 @@ static void adjweek(rtcm_t *rtcm, double tow)
     if      (tow<tow_p-302400.0) tow+=604800.0;
     else if (tow>tow_p+302400.0) tow-=604800.0;
     rtcm->time=gpst2time(week,tow);
+    rtcm->tnav=rtcm->time; /* obs time updates nav time tag */
+}
+/* get time tag for nav messages ----------------------------------------------
+* the time tag is updated by every message with time (obs/ssr) and by time of
+* ephemeris (GPS/GLO/GAL/BDS/QZS/IRN) if it differs from the tag more than a
+* tolerance, initialized by approx time */
+static gtime_t navtime(rtcm_t *rtcm)
+{
+    if (rtcm->tnav.time==0) {
+        if (rtcm->time.time==0) rtcm->time=utc2gpst(timeget());
+        rtcm->tnav=rtcm->time;
+    }
+    return rtcm->tnav;
+}
+/* update time tag for nav messages by ephemeris time ------------------------*/
+static void updnavtime(rtcm_t *rtcm, gtime_t time)
+{
+    if (fabs(timediff(time,navtime(rtcm)))>TTOL_NAV) rtcm->tnav=time;
 }
 /* adjust weekly rollover of BDS time ----------------------------------------*/
 static int adjbdtweek(int week)
@@ -297,6 +320,7 @@ static void adjday_glot(rtcm_t *rtcm, double tod)
     else if (tod>tod_p+43200.0) tod-=86400.0;
     time=gpst2time(week,tow+tod);
     rtcm->time=utc2gpst(timeadd(time,-10800.0));
+    rtcm->tnav=rtcm->time; /* obs time updates nav time tag */
 }
 /* adjust carrier-phase rollover ---------------------------------------------*/
 static double adjcp(rtcm_t *rtcm, int sat, int idx, double cp)
@@ -897,11 +921,11 @@ static int decode_type1019(rtcm_t *rtcm)
     }
     eph.sat=sat;
     eph.week=adjgpsweek(week);
-    if (rtcm->time.time==0) rtcm->time=utc2gpst(timeget());
-    tt=timediff(gpst2time(eph.week,eph.toes),rtcm->time);
+    tt=timediff(gpst2time(eph.week,eph.toes),navtime(rtcm));
     if      (tt<-302400.0) eph.week++;
     else if (tt>=302400.0) eph.week--;
     eph.toe=gpst2time(eph.week,eph.toes);
+    updnavtime(rtcm,eph.toe);
     eph.toc=gpst2time(eph.week,toc);
     eph.ttr=rtcm->time;
     eph.A=sqrtA*sqrtA;
@@ -951,6 +975,11 @@ static int decode_type1020(rtcm_t *rtcm)
         trace(2,"rtcm3 1020 satellite number error: prn=%d\n",prn);
         return -1;
     }
+    if (tk_h>23.0||tk_m>59.0||tb>95) {
+        trace(2,"rtcm3 1020 tk/tb range error: prn=%d tk=%02.0f:%02.0f tb=%d\n",
+              prn,tk_h,tk_m,tb);
+        return -1;
+    }
     trace(4,"decode_type1020: prn=%d tk=%02.0f:%02.0f:%02.0f\n",prn,tk_h,tk_m,tk_s);
     
     if (rtcm->outtype) {
@@ -961,13 +990,18 @@ static int decode_type1020(rtcm_t *rtcm)
     geph.sat=sat;
     geph.svh=bn;
     geph.iode=tb&0x7F;
-    if (rtcm->time.time==0) rtcm->time=utc2gpst(timeget());
-    tow=time2gpst(gpst2utc(rtcm->time),&week);
+    tow=time2gpst(gpst2utc(navtime(rtcm)),&week);
     tod=fmod(tow,86400.0); tow-=tod;
     tof=tk_h*3600.0+tk_m*60.0+tk_s-10800.0; /* lt->utc */
     if      (tof<tod-43200.0) tof+=86400.0;
     else if (tof>tod+43200.0) tof-=86400.0;
     geph.tof=utc2gpst(gpst2time(week,tow+tof));
+    
+    /* update nav time tag by tof if differs more than tolerance, so the day
+       is tracked in stream without obs (e.g. 24h broadcast ephemeris) */
+    updnavtime(rtcm,geph.tof);
+    tow=time2gpst(gpst2utc(rtcm->tnav),&week);
+    tod=fmod(tow,86400.0); tow-=tod;
     toe=tb*900.0-10800.0; /* lt->utc */
     if      (toe<tod-43200.0) toe+=86400.0;
     else if (toe>tod+43200.0) toe-=86400.0;
@@ -1224,11 +1258,11 @@ static int decode_type1041(rtcm_t *rtcm)
     }
     eph.sat=sat;
     eph.week=adjgpsweek(week);
-    if (rtcm->time.time==0) rtcm->time=utc2gpst(timeget());
-    tt=timediff(gpst2time(eph.week,eph.toes),rtcm->time);
+    tt=timediff(gpst2time(eph.week,eph.toes),navtime(rtcm));
     if      (tt<-302400.0) eph.week++;
     else if (tt>=302400.0) eph.week--;
     eph.toe=gpst2time(eph.week,eph.toes);
+    updnavtime(rtcm,eph.toe);
     eph.toc=gpst2time(eph.week,toc);
     eph.ttr=rtcm->time;
     eph.A=sqrtA*sqrtA;
@@ -1297,11 +1331,11 @@ static int decode_type1044(rtcm_t *rtcm)
     }
     eph.sat=sat;
     eph.week=adjgpsweek(week);
-    if (rtcm->time.time==0) rtcm->time=utc2gpst(timeget());
-    tt=timediff(gpst2time(eph.week,eph.toes),rtcm->time);
+    tt=timediff(gpst2time(eph.week,eph.toes),navtime(rtcm));
     if      (tt<-302400.0) eph.week++;
     else if (tt>=302400.0) eph.week--;
     eph.toe=gpst2time(eph.week,eph.toes);
+    updnavtime(rtcm,eph.toe);
     eph.toc=gpst2time(eph.week,toc);
     eph.ttr=rtcm->time;
     eph.A=sqrtA*sqrtA;
@@ -1375,11 +1409,11 @@ static int decode_type1045(rtcm_t *rtcm)
     }
     eph.sat=sat;
     eph.week=week+1024; /* gal-week = gst-week + 1024 */
-    if (rtcm->time.time==0) rtcm->time=utc2gpst(timeget());
-    tt=timediff(gpst2time(eph.week,eph.toes),rtcm->time);
+    tt=timediff(gpst2time(eph.week,eph.toes),navtime(rtcm));
     if      (tt<-302400.0) eph.week++;
     else if (tt>=302400.0) eph.week--;
     eph.toe=gpst2time(eph.week,eph.toes);
+    updnavtime(rtcm,eph.toe);
     eph.toc=gpst2time(eph.week,toc);
     eph.ttr=rtcm->time;
     eph.A=sqrtA*sqrtA;
@@ -1456,11 +1490,11 @@ static int decode_type1046(rtcm_t *rtcm)
     }
     eph.sat=sat;
     eph.week=week+1024; /* gal-week = gst-week + 1024 */
-    if (rtcm->time.time==0) rtcm->time=utc2gpst(timeget());
-    tt=timediff(gpst2time(eph.week,eph.toes),rtcm->time);
+    tt=timediff(gpst2time(eph.week,eph.toes),navtime(rtcm));
     if      (tt<-302400.0) eph.week++;
     else if (tt>=302400.0) eph.week--;
     eph.toe=gpst2time(eph.week,eph.toes);
+    updnavtime(rtcm,eph.toe);
     eph.toc=gpst2time(eph.week,toc);
     eph.ttr=rtcm->time;
     eph.A=sqrtA*sqrtA;
@@ -1530,11 +1564,11 @@ static int decode_type1042(rtcm_t *rtcm)
     }
     eph.sat=sat;
     eph.week=adjbdtweek(week);
-    if (rtcm->time.time==0) rtcm->time=utc2gpst(timeget());
-    tt=timediff(bdt2gpst(bdt2time(eph.week,eph.toes)),rtcm->time);
+    tt=timediff(bdt2gpst(bdt2time(eph.week,eph.toes)),navtime(rtcm));
     if      (tt<-302400.0) eph.week++;
     else if (tt>=302400.0) eph.week--;
     eph.toe=bdt2gpst(bdt2time(eph.week,eph.toes)); /* bdt -> gpst */
+    updnavtime(rtcm,eph.toe);
     eph.toc=bdt2gpst(bdt2time(eph.week,toc));      /* bdt -> gpst */
     eph.ttr=rtcm->time;
     eph.A=sqrtA*sqrtA;
@@ -1564,7 +1598,7 @@ static int decode_ssr_epoch(rtcm_t *rtcm, int sys, int subtype)
             tow=getbitu(rtcm->buff,i,20); i+=20;
             adjweek(rtcm,tow);
             /* BDS: the epoch is BDT (14 s behind GPST): the same epoch as the GPS messages has a tow 14 s smaller (CNES: 604776 / 604790) */
-            if (sys==SYS_CMP) rtcm->time=timeadd(rtcm->time,14.0);
+            if (sys==SYS_CMP) rtcm->tnav=rtcm->time=timeadd(rtcm->time,14.0);
         }
     }
     else { /* IGS SSR */

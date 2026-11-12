@@ -43,6 +43,8 @@
 *                           force option -scan
 *                           delete option -noscan
 *                           surppress warnings
+*           2026/11/12 1.21 estimate approx time of RTCM3 from ephemeris week/tow
+*                           if -tr option and time-tag file are not available
 *-----------------------------------------------------------------------------*/
 #include <stdio.h>
 #include <stdlib.h>
@@ -93,7 +95,7 @@ static const char *help[]={
 "     file         input receiver binary log file",
 "     -ts y/m/d h:m:s  start time [all]",
 "     -te y/m/d h:m:s  end time [all]",
-"     -tr y/m/d h:m:s  approximated time for RTCM",
+"     -tr y/m/d h:m:s  approximated time for RTCM [auto-scan ephemeris]",
 "     -ti tint     observation data interval (s) [all]",
 "     -tt ttol     observation data epoch tolerance (s) [0.005]",
 "     -span span   time span (h) [all]",
@@ -152,7 +154,9 @@ static const char *help[]={
 " <file>.cnav, <file>.inav and <file>.sbs) are used. To obtain week number info",
 " for RTCM file, use -tr option to specify the approximated log start time.",
 " Without -tr option, the program obtains the week number from the time-tag file"
-" (if it exists) or the last modified time of the log file instead.",
+" (if it exists), else for RTCM3 file from the week number and time of week of"
+" the first GAL/BDS (or GPS/QZS/IRN) broadcast ephemeris in the file, else from"
+" the last modified time of the log file instead.",
 "",
 " If receiver type is not specified, type is recognized by the input",
 " file extension as follows.",
@@ -337,6 +341,19 @@ static void setmask(const char *argv, rnxopt_t *opt, int mask)
         }
     }
 }
+/* check if time-tag file exists ---------------------------------------------*/
+static int has_tagfile(const char *file)
+{
+    FILE *fp;
+    char path[1024],path_tag[1100],*paths[1];
+    
+    paths[0]=path;
+    if (!expath(file,paths,1)) return 0;
+    sprintf(path_tag,"%.1019s.tag",path);
+    if (!(fp=fopen(path_tag,"rb"))) return 0;
+    fclose(fp);
+    return 1;
+}
 /* get start time of input file -----------------------------------------------*/
 static int get_filetime(const char *file, gtime_t *time)
 {
@@ -383,8 +400,9 @@ static int cmdopts(int argc, char **argv, rnxopt_t *opt, char **ifile,
 {
     double eps[]={1980,1,1,0,0,0},epe[]={2037,12,31,0,0,0};
     double epr[]={2010,1,1,0,0,0},span=0.0;
-    int i,j,k,sat,nf=5,nc=2,format=-1;
-    char *p,*sys,*fmt="",*paths[1],path[1024],buff[256];
+    int i,j,k,sat,nf=5,nc=2,format=-1,tr_user;
+    char *p,*sys,*fmt="",*paths[1],path[1024],buff[256],tstr[64];
+    gtime_t tscan={0};
     
     opt->rnxver=304;
     opt->obstype=OBSTYPE_PR|OBSTYPE_CP;
@@ -544,6 +562,7 @@ static int cmdopts(int argc, char **argv, rnxopt_t *opt, char **ifile,
     if (nf>=4) opt->freqtype|=FREQTYPE_L4;
     if (nf>=5) opt->freqtype|=FREQTYPE_L5;
     
+    tr_user=opt->trtcm.time!=0;
     if (!opt->trtcm.time) {
         get_filetime(*ifile,&opt->trtcm);
     }
@@ -585,6 +604,14 @@ static int cmdopts(int argc, char **argv, rnxopt_t *opt, char **ifile,
         else if (!strcmp(p,".nav"  ))  format=STRFMT_RINEX;
         else if (!strcmp(p+3,"n"   ))  format=STRFMT_RINEX;
         else if (!strcmp(p+3,"N"   ))  format=STRFMT_RINEX;
+    }
+    /* RTCM3: without -tr option and time-tag file, estimate approximated time
+       from week number and time of week of broadcast ephemeris in the file */
+    if (!tr_user&&format==STRFMT_RTCM3&&*ifile&&!has_tagfile(*ifile)&&
+        scan_rtcm3_time(*ifile,&tscan)) {
+        opt->trtcm=tscan;
+        time2str(tscan,tstr,0);
+        fprintf(stderr,"approximated time by ephemeris: %s\n",tstr);
     }
     return format;
 }

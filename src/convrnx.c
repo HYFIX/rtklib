@@ -43,11 +43,15 @@
 *                           fix bug on screening time in screent_ttol()
 *                           fix bug on screening QZS L1S messages as SBAS
 *                           use integer types in stdint.h
+*           2026/11/12 1.x  add scan_rtcm3_time() to estimate approx time of RTCM3
+*                           use nav time tag for nav messages of RTCM
+*                           clear obs data before conversion pass
 *-----------------------------------------------------------------------------*/
 #include "rtklib.h"
 
 #define NOUTFILE        9       /* number of output files */
 #define NSATSYS         8       /* number of satellite systems */
+#define MAXSCANMSG      1000000 /* max messages scanned for approx time */
 #define TSTARTMARGIN    60.0    /* time margin for file name replacement */
 
 #define EVENT_STARTMOVE 2       /* rinex event start moving antenna */
@@ -250,7 +254,8 @@ static int input_strfile(strfile_t *str)
     }
     else if (str->format==STRFMT_RTCM3) {
         if ((type=input_rtcm3f(&str->rtcm,str->fp))>=1) {
-            str->time=str->rtcm.time;
+            /* nav message: use nav time tag (obs time or ephemeris time) */
+            str->time=type==2&&str->rtcm.tnav.time?str->rtcm.tnav:str->rtcm.time;
             str->ephsat=str->rtcm.ephsat;
             str->ephset=str->rtcm.ephset;
             str->staid=str->rtcm.staid;
@@ -288,7 +293,7 @@ static int open_strfile(strfile_t *str, const char *file)
             showmsg("rtcm open error: %s",file);
             return 0;
         }
-        str->rtcm.time=str->time;
+        str->rtcm.time=str->rtcm.tnav=str->time;
     }
     else if (str->format<=MAXRCVFMT) {
         if (!(str->fp=fopen(file,"rb"))) {
@@ -1293,7 +1298,7 @@ static int convrnx_s(int sess, int format, rnxopt_t *opt, const char *file,
         return 0;
     }
     str->time=str->tstart;
-    
+    str->obs->n=0;
     for (i=0;i<nf&&!abort;i++) {
         if (!mask[i]) continue;
         
@@ -1340,6 +1345,105 @@ static int convrnx_s(int sess, int format, rnxopt_t *opt, const char *file,
     for (i=0;i<MAXEXFILE;i++) free(epath[i]);
     
     return abort?-1:1;
+}
+/* get bit field from RTCM3 message buffer -----------------------------------*/
+static uint32_t scan_bitu(const uint8_t *buff, int pos, int len)
+{
+    uint32_t bits=0;
+    int i;
+    for (i=pos;i<pos+len;i++) bits=(bits<<1)+((buff[i/8]>>(7-i%8))&1u);
+    return bits;
+}
+/* decode week and toe of ephemeris message in RTCM3 message -----------------
+* decode only the week number and time of week fields (no other decoder used)
+* args   : uint8_t *buff    I   RTCM3 message (preamble,length,data,crc)
+*          int    len       I   message length (bytes, w/o header/crc)
+*          gtime_t *toe     O   toe (GPST)
+*          int    *sys      O   satellite system
+* return : status (1:ok,0:not ephemeris message or error)
+*-----------------------------------------------------------------------------*/
+static int scan_eph_time(const uint8_t *buff, int len, gtime_t *toe, int *sys)
+{
+    int type=scan_bitu(buff,24,12),pw,pt,nw,nt,week,w;
+    double toes,scale;
+    
+    /* position of week and toe, bits of week and toe (from message start) */
+    switch (type) {
+        case 1019: *sys=SYS_GPS; pw=36+ 6; nw=10; pt=36+276; nt=16; scale=16.0; break;
+        case 1044: *sys=SYS_QZS; pw=36+434;nw=10; pt=36+234; nt=16; scale=16.0; break;
+        case 1041: *sys=SYS_IRN; pw=36+ 6; nw=10; pt=36+268; nt=16; scale=16.0; break;
+        case 1045:
+        case 1046: *sys=SYS_GAL; pw=36+ 6; nw=12; pt=36+282; nt=14; scale=60.0; break;
+        case 1042: *sys=SYS_CMP; pw=36+ 6; nw=13; pt=36+287; nt=17; scale= 8.0; break;
+        default: return 0;
+    }
+    if (len*8<pt+nt||len*8<pw+nw) return 0;
+    week=(int)scan_bitu(buff,pw,nw);
+    toes=scan_bitu(buff,pt,nt)*scale;
+    if (toes>=604800.0) return 0;
+    
+    switch (*sys) {
+        case SYS_GAL: /* gst-week (unambiguous until 2077) */
+            *toe=gpst2time(week+1024,toes);
+            break;
+        case SYS_CMP: /* bdt-week (13bit) */
+            (void)time2bdt(gpst2bdt(utc2gpst(timeget())),&w);
+            if (w<1) w=1;
+            *toe=bdt2gpst(bdt2time(week+(w-week+512)/1024*1024,toes));
+            break;
+        default: /* gps-week (10bit) resolved by current date */
+            *toe=gpst2time(adjgpsweek(week),toes);
+            break;
+    }
+    return 1;
+}
+/* scan RTCM3 file for approximate date -------------------------------------
+* estimate approximate date from week number and time of week (toe) of
+* broadcast ephemeris messages in a RTCM3 file. The week number and toe bits
+* are decoded directly from messages. GAL (12bit GST week) and BDS (13bit BDT
+* week) week numbers are unambiguous, thus the first GAL/BDS ephemeris is used.
+* If no GAL/BDS ephemeris is found, the first GPS/QZS/IRN ephemeris is used
+* (10bit week is resolved by the current date).
+* args   : char    *file    I   RTCM3 file path (wild-card expanded)
+*          gtime_t *time    O   approximate time (GPST)
+* return : status (1:ok,0:no ephemeris found or error)
+*-----------------------------------------------------------------------------*/
+extern int scan_rtcm3_time(const char *file, gtime_t *time)
+{
+    FILE *fp;
+    uint8_t buff[1100];
+    char path[1024],*paths[1];
+    gtime_t tf={0},toe;
+    int i,len,sys,c,stat=0;
+    
+    paths[0]=path;
+    if (!expath(file,paths,1)||!(fp=fopen(path,"rb"))) return 0;
+    
+    for (i=0;i<MAXSCANMSG&&(c=fgetc(fp))!=EOF;) {
+        if (c!=0xD3) continue;
+        if (fread(buff+1,1,2,fp)<2) break;
+        buff[0]=(uint8_t)c;
+        len=(int)scan_bitu(buff,14,10);
+        if ((int)fread(buff+3,1,len+3,fp)<len+3) break;
+        if (rtk_crc24q(buff,len+3)!=scan_bitu(buff,(len+3)*8,24)) {
+            fseek(fp,-(long)(len+5),SEEK_CUR); /* resync after preamble */
+            continue;
+        }
+        i++;
+        if (!scan_eph_time(buff,len+3,&toe,&sys)) continue;
+        if (sys==SYS_GAL||sys==SYS_CMP) { /* unambiguous week */
+            *time=toe;
+            stat=1;
+            break;
+        }
+        if (!tf.time) tf=toe;
+    }
+    if (!stat&&tf.time) {
+        *time=tf;
+        stat=1;
+    }
+    fclose(fp);
+    return stat;
 }
 /* RINEX converter -------------------------------------------------------------
 * convert receiver log file to RINEX obs/nav, SBAS log files

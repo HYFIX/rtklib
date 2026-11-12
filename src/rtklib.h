@@ -919,6 +919,8 @@ typedef struct {        /* RTCM control struct type */
     int obsflag;        /* obs data complete flag (1:ok,0:not complete) */
     int ephsat;         /* input ephemeris satellite number */
     int ephset;         /* input ephemeris set (0-1) */
+    gtime_t tnav;       /* time tag for nav messages (updated by obs time and
+                           by time of ephemeris if differ more than tolerance) */
     double cp[MAXSAT][NFREQ+NEXOBS]; /* carrier-phase measurement */
     uint16_t lock[MAXSAT][NFREQ+NEXOBS]; /* lock time */
     uint16_t loss[MAXSAT][NFREQ+NEXOBS]; /* loss of lock count */
@@ -1546,6 +1548,7 @@ EXPORT int outrnxgnavb(FILE *fp, const rnxopt_t *opt, const geph_t *geph);
 EXPORT int outrnxhnavb(FILE *fp, const rnxopt_t *opt, const seph_t *seph);
 EXPORT int rtk_uncompress(const char *file, char *uncfile);
 EXPORT int convrnx(int format, rnxopt_t *opt, const char *file, char **ofile);
+EXPORT int scan_rtcm3_time(const char *file, gtime_t *time);
 EXPORT int  init_rnxctr (rnxctr_t *rnx);
 EXPORT void free_rnxctr (rnxctr_t *rnx);
 EXPORT int  open_rnxctr (rnxctr_t *rnx, FILE *fp);
